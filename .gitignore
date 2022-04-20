@@ -1,0 +1,13 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.pptx
+*.csv
+*.feather
+*.numbers
+phantomjs-2.1.1-macosx
+renv
+*.pdf
+test_place_names_acc
+.DS_Store
