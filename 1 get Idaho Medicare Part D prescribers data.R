@@ -2,11 +2,8 @@
 # Description: Get Idaho Medicare Part D prescriber data. This includes all
 # available years of the by-provider & by-provider-and-drug datasets.
 
-# Resources
-library(feather)
-
 # Get all versions (years) of medicare-part-d-prescribers-by-provider
-# NOTE: Resolve duplicate columns based on different spellings
+# NOTE: Resolve duplicate columns based on different spellings across years
 # PRSCRBR_NPI/Prscrbr_NPI, Prscrbr_zip5/Prscrbr_Zip5,
 # Prscrbr_Type_src/Prscrbr_Type_Src
 p_ver <- get_dataset_versions(
