@@ -37,7 +37,7 @@ get_dataset_versions <- function(dataset) {
     message("done.")
     
     # Navigate to URL and wait for page to load
-    message(paste0("Opening connection to target URL... "), appendLF = FALSE)
+    message(paste0("Opening target URL... "), appendLF = FALSE)
     remDr$navigate(url)
     Sys.sleep(5)
     message("done.")
