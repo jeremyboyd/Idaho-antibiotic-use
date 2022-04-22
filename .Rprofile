@@ -16,36 +16,49 @@ api_key <- Sys.getenv("GOOGLE_API_KEY")
 #### get_dataset_versions() ####
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-# Returns a table giving all of the years/versions when given an input dataset
-# string like "medicare-part-d-presribers-by-provider".
+# Given a dataset string like "medicare-part-d-prescribers-by-provider", returns
+# a table showing all of the years/versions of the dataset and their IDs.
 get_dataset_versions <- function(dataset) {
     
     # Create URL to the API docs page for the input dataset
     url <- paste0("https://data.cms.gov/provider-summary-by-type-of-service/medicare-part-d-prescribers/", dataset, "/api-docs")
     
-    # Open firefox browser
-    remote_driver <- rsDriver(browser = "firefox")
+    # Start Selenium server
+    message(paste0("Starting Selenium server... "), appendLF = FALSE)
+    system("docker run -d -p 4445:4444 selenium/standalone-firefox",
+           wait = TRUE)
+    message("done.")
     
-    # Get client info; use client to navigate to target page
-    client <- remote_driver[["client"]]
-    client$navigate(url)
+    # Open connection to server
+    message(paste0("Opening connection to server... "), appendLF = FALSE)
+    remDr <- remoteDriver(port = 4445L)
+    Sys.sleep(5)
+    remDr$open()
+    message("done.")
     
-    # Pause to give time for page to load
-    Sys.sleep(7)
+    # Navigate to URL and wait for page to load
+    message(paste0("Opening connection to target URL... "), appendLF = FALSE)
+    remDr$navigate(url)
+    Sys.sleep(5)
+    message("done.")
     
-    # Capture page source, read as HTML, get container elements and read as
-    # tables, take fourth table, add dataset name.
-    versions <- client$getPageSource() %>%
+    # Scrape table of dataset versions
+    message(paste0("Scraping data... "), appendLF = FALSE)
+    versions <- remDr$getPageSource() %>%
         .[[1]] %>%
         read_html() %>%
         html_elements(".container") %>%
         html_table() %>%
         .[[4]] %>%
         mutate(dataset = dataset)
+    message("done.")
     
-    # Close client, stop server
-    client$close()
-    remote_driver[["server"]]$stop()
+    # Close connection to server, stop server
+    message(paste0("Closing connection to server & stopping server... "),
+            appendLF = FALSE)
+    remDr$close()
+    system("docker stop $(docker ps -q)")
+    message("done.")
     
     # Return versions table
     return(versions)
