@@ -23,8 +23,10 @@ get_dataset_versions <- function(dataset) {
     # Create URL to the API docs page for the input dataset
     url <- paste0("https://data.cms.gov/provider-summary-by-type-of-service/medicare-part-d-prescribers/", dataset, "/api-docs")
     
-    # Start Selenium server
+    # Start Selenium server by opening Docker & starting standalone-firefox
+    # image.
     message(paste0("Starting Selenium server... "), appendLF = FALSE)
+    system("open --background -a Docker", wait = TRUE)
     system("docker run -d -p 4445:4444 selenium/standalone-firefox",
            wait = TRUE)
     message("done.")
