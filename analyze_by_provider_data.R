@@ -4,13 +4,7 @@
 
 # TODO:
 # Automatically check to see if new data versions exist. If so, download them.
-# Methods to rbind different years of a dataset (columns across different years aren't of the same type)
 # How do I add county? Is there a standardized way to go from zip code to county? Think I could get more location info from a Google place search, including county.
-# Structure into separate files? 1. get data, 2. get place names, 3, 
-
-# Should only read in the data once.
-# Should only do address-name API once.
-
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #### Read & organize Idaho 2019 providers-by-prescriber ####
