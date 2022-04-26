@@ -13,6 +13,31 @@ filter <- dplyr::filter
 api_key <- Sys.getenv("GOOGLE_API_KEY")
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### Custom ggplot2 theme ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+# Define custom ggplot theme
+my_theme <- function(base_size) {
+    
+    # Replace elements we want to change
+    theme_classic(base_size = base_size) %+replace%
+        
+        theme(
+            panel.grid.major = element_line(color = "gray90", size = .2),
+            panel.spacing = unit(2, "lines"),
+            strip.background = element_blank(),
+            axis.title.y = element_text(
+                angle = 0, vjust = .5,
+                
+                # Increase axis title's right margin
+                margin = margin(r = 5))
+        )
+}
+
+# Set to custom theme
+theme_set(my_theme(base_size = 14))
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #### get_dataset_versions() ####
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -103,20 +128,57 @@ get_data <- function(version_table) {
         
         # Retrieve data, set cols for year, dataset, uuid, make all cols
         # character to facilitate rbinding.
-        current_version <- fromJSON(url) %>%
-            as_tibble() %>%
-            mutate(year = year,
-                   dataset = dataset,
-                   uuid = uuid) %>%
-            mutate(across(everything(), as.character))
         
-        # 2017 by-provider data has this additional column. Add it to other
-        # versions that are missing it.
-        if(dataset == "medicare-part-d-prescribers-by-provider" &
-           !"Prscrbr_Mdcr_Enrl_Stus" %in% names(current_version)) {
-            current_version <- current_version %>%
-                mutate(Prscrbr_Mdcr_Enrl_Stus = NA_character_)
+        # Apply these transformations to by-provider dataset
+        if(dataset == "medicare-part-d-prescribers-by-provider") {
+            current_version <- fromJSON(url) %>%
+                as_tibble() %>%
+                mutate(year = year,
+                       dataset = dataset,
+                       uuid = uuid) %>%
+                mutate(
+                    across(matches("^prscrbr|name$|flag$", ignore.case = TRUE),
+                           as.character),
+                    across(where(is.character), ~ str_squish(.)),
+                    across(matches(
+                        "(Clms|Suply|Benes|Cnt|Cst|Rate|Age|Risk_Scre|Fills)$"),
+                        ~ as.double(str_remove_all(., "[,%$]"))),
+                    Prscrbr_RUCA = as.double(Prscrbr_RUCA))
+            
+            # 2017 by-provider data has this additional column. Add it to other
+            # versions that are missing it.
+            if(!"Prscrbr_Mdcr_Enrl_Stus" %in% names(current_version)) {
+                current_version <- current_version %>%
+                    mutate(Prscrbr_Mdcr_Enrl_Stus = NA_character_)
+            }
+            
+        # Apply these transformations to all other datasets
+        } else {
+            current_version <- fromJSON(url) %>%
+                as_tibble() %>%
+                mutate(year = year,
+                       dataset = dataset,
+                       uuid = uuid) %>%
+                mutate(
+                    across(matches("^prscrbr|name$|flag$", ignore.case = TRUE),
+                           as.character),
+                    across(where(is.character), ~ str_squish(.)),
+                    across(matches(
+                        "(Clms|Suply|Benes|Cnt|Cst|Rate|Age|Risk_Scre|Fills)$"),
+                        ~ as.double(str_remove_all(., "[,%$]"))))
         }
+        
+        # Standardize names of these columns across dataset versions
+        if("PRSCRBR_NPI" %in% names(current_version)) {
+            current_version <- current_version %>%
+                rename(Prscrbr_NPI = PRSCRBR_NPI) }
+        if("Prscrbr_zip5" %in% names(current_version)) {
+            current_version <- current_version %>%
+                rename(Prscrbr_Zip5 = Prscrbr_zip5) }
+        if("Prscrbr_Type_src" %in% names(current_version)) {
+            current_version <- current_version %>%
+                rename(Prscrbr_Type_Src = Prscrbr_Type_src) }
+        
         message("done.")
         current_version
     })
@@ -279,4 +341,43 @@ update_zero_results <- function(zero_table) {
         
         
     } else { message("All names are already up to date.") }
+}
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### claims_year() ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+# Given an input drug class from "Generic drug bank.csv" (e.g., Antibiotics,
+# Tetracycline), compute total claims per year for each prescriber using the
+# Medicare Part D provider by prescriber and drug data.
+claims_year <- function(drug_class) {
+    pd2 %>%
+        filter(!!sym(drug_class) == 1) %>%
+        group_by(Prscrbr_NPI, year) %>%
+        summarize(
+            n_drugs = sum(!is.na(Tot_Clms)),
+            tot_clms = sum(Tot_Clms, an.rm = TRUE), .groups = "drop") %>%
+        return()
+}
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### claims_1k_summary() ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+# Given an output table from claims_year(), compute claims per 1K beneficiaries
+# for each year represented in the data. Note that p_benes is the Medicare Part
+# D provider by prescribers dataset--just these cols: Prscrbr_NPI, year,
+# Tot_Benes.
+claims_1k_summary <- function(table) {
+    table %>%
+        left_join(p_benes, by = c("Prscrbr_NPI", "year")) %>%
+        mutate(claims_1k = tot_clms / (Tot_Benes / 1000)) %>%
+        group_by(year) %>%
+        summarize(
+            n_miss = sum(is.na(claims_1k)),
+            n_prscrbr = sum(!is.na(claims_1k)),
+            mean = mean(claims_1k, na.rm = TRUE),
+            sd = sd(claims_1k, na.rm = TRUE),
+            se = sd / sqrt(n_prscrbr), .groups = "drop") %>%
+        return()
 }
