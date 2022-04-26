@@ -59,6 +59,464 @@ write_csv(p2, paste0(
 # Zero table to Box
 write_csv(zero, paste0(box_dir, "Zero address-name results from Idaho 2019 by-prescribers.csv"))
 
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### Antibiotic claims / 1K beneficiaries from by-provider data ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+# Tot_Benes: total number of unique Medicare Part D beneficiaries with at least
+# one drug claim. This means we're probably undercounting the number of
+# beneficiaries because there will be some with no drug claims.
+# Antbtc_Tot_Clms: total claims of antibiotic drugs, including refills. Values <
+# 11 are suppressed.
+
+# Read in data
+p <- read_feather("Idaho prescribers by provider data.feather")
+
+# Compute & summarize antibiotic claims per 1K beneficiaries
+p_claims_1k_sum <- p %>%
+    
+    # Compute claims per 1k beneficiaries. Will result in NA for rows that are
+    # missing either or both of Antbtc_Tot_Clms and Tot_Benes.
+    mutate(claims_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000)) %>%
+    
+    # Summarize by year
+    group_by(year) %>%
+    summarize(
+        
+        # Rows missing claims_1k
+        n_miss = sum(is.na(claims_1k)),
+        
+        # Rows with claims_1k
+        n_prscrbr = sum(!is.na(claims_1k)),
+        
+        # Claims per 1K mean, sd, se
+        mean = mean(claims_1k, na.rm = TRUE),
+        sd = sd(claims_1k, na.rm = TRUE),
+        se = sd / sqrt(n_prscrbr), .groups = "drop") %>%
+    mutate(class = "Antibiotic (numerator from prescriber table)")
+
+# Figure
+p_claims_1k_sum %>%
+    mutate(group = "group") %>%
+    ggplot(mapping = aes(x = year, y = mean, group = group)) +
+    geom_line() +
+    geom_errorbar(aes(ymin = mean - se,
+                      ymax = mean + se),
+                  width = 0.2, color = "gray50") +
+    scale_y_continuous(breaks = seq(420, 500, 20),
+                       limits = c(420, 510)) +
+    labs(x = "Year",
+         y = "Antibiotic claims\nper 1K\nbeneficiaries")
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### Claims / 1K beneficiaries from by provider & drug data ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+# Tot_Clms: The number of Medicare Part D claims. This includes original
+# prescriptions and refills.
+# Tot_Benes: The total number of unique Medicare Part D beneficiaries with at
+# least one claim for the drug.
+
+# Read in by provider & drug dataset
+pd <- read_feather("Idaho prescribers by provider & drug data.feather")
+
+# Table of generic drugs with coding for antibiotic and antibiotic type
+generics <- read_csv(paste0(box_dir, "Generic drug bank.csv")) %>%
+    
+    # Only keep rows that have been coded
+    filter(!is.na(Antibiotic)) %>%
+    
+    # Get rid of any extra whitespace in character cols. This can cause joins to
+    # fail later.
+    mutate(across(where(is.character), ~ str_squish(.)))
+
+# Both of the following tables are needed to run claims_year() and
+# claims_1k_summary(). pd2 is the source for numerators in the claims per 1K
+# beneficiary computation; p_benes is the source for denominators.
+pd2 <- pd %>%
+    left_join(generics, by = "Gnrc_Name") %>%
+    select(Prscrbr_NPI, year, Gnrc_Name, Tot_Clms, `Anti-Infective`:Other)
+p_benes <- p %>%
+    select(Prscrbr_NPI, year, Tot_Benes)
+
+# Drug classes that we want to compute claims per 1K beneficiaries for
+drug_classes <- names(generics)[4:length(names(generics))]
+
+# Loop over drug classes
+pd_claims_1k_sum <- map_dfr(drug_classes, function(class) {
+    message(paste0("Computing claims per 1K beneficiaries for class ", class,
+                   "..."))
+    claims_year(drug_class = class) %>%
+        claims_1k_summary() %>%
+        mutate(class = class)
+}) %>%
+    mutate(class = if_else(
+        class == "Antibiotic",
+        "Antibiotic (numerator from prescriber & drug table)",
+        class))
+
+# Figure
+# This figure could be improved by jittering datapoints & errorbars, and
+# replacing the legend with labels for each line.
+pd_claims_1k_sum %>%
+    ggplot(mapping = aes(x = year,
+                         y = mean,
+                         group = class,
+                         color = class)) +
+    geom_line() +
+    geom_errorbar(aes(ymin = mean - se,
+                      ymax = mean + se),
+                  width = 0.2, size = 0.4, color = "gray50") +
+    scale_x_continuous(breaks = seq(min(claims_1k_sum$year),
+                                  max(claims_1k_sum$year), 1)) +
+    labs(x = "Year",
+         y = "Claims per\n1K beneficiaries",
+         color = "Class")
+
+# Faceted claims per 1K beneficiaries, all classes
+bind_rows(pd_claims_1k_sum, p_claims_1k_sum) %>%
+    mutate(class = str_wrap(class, 30),
+           class = fct_relevel(class, "Other", after = Inf)) %>%
+    ggplot(mapping = aes(x = year,
+                         y = mean,
+                         group = class,
+                         color = class)) +
+    geom_errorbar(aes(ymin = mean - se,
+                      ymax = mean + se),
+                  width = 0.2, size = 0.4, color = "gray50") +
+    geom_line() +
+    scale_x_continuous(breaks = seq(min(claims_1k_sum$year),
+                                    max(claims_1k_sum$year), 2)) +
+    scale_y_continuous(breaks = seq(0, 1000, 100)) +
+    facet_wrap(~ class, ncol = 5) +
+    labs(x = "Year",
+         y = "Claims per\n1K beneficiaries",
+         color = "Class") +
+    theme(legend.position = "none")
+ggsave(paste0(box_dir, "figures/Claims per 1K beneficiaries, all classes.png"))
+
+# Faceted claims per 1K beneficiaries, antibiotics
+bind_rows(pd_claims_1k_sum, p_claims_1k_sum) %>%
+    mutate(class = str_wrap(class, 30)) %>%
+    filter(str_detect(class, "Antibiotic")) %>%
+    ggplot(mapping = aes(x = year,
+                         y = mean,
+                         group = class,
+                         color = class)) +
+    geom_errorbar(aes(ymin = mean - se,
+                      ymax = mean + se),
+                  width = 0.2, size = 0.4, color = "gray50") +
+    geom_line() +
+    scale_x_continuous(breaks = seq(min(claims_1k_sum$year),
+                                    max(claims_1k_sum$year), 1)) +
+    facet_wrap(~ class) +
+    labs(x = "Year",
+         y = "Claims per\n1K beneficiaries",
+         color = "Class") +
+    theme(legend.position = "none")
+ggsave(paste0(box_dir, "figures/Claims per 1K beneficiaries, antibiotics.png"))
+
+
+
+
+
+
+
+
+
+
+
+
+
+# join <- pd %>%
+#     left_join(generics, by = "Gnrc_Name") %>%
+#     filter(!is.na(Antibiotic))
+# no_join <- pd %>%
+#     left_join(generics, by = "Gnrc_Name") %>%
+#     filter(is.na(Antibiotic))
+# 
+# join %>%
+#     count(Gnrc_Name) %>%
+#     arrange(desc(n)) %>%
+#     pull(Gnrc_Name)
+# 
+# no_join %>%
+#     count(Gnrc_Name) %>%
+#     arrange(desc(n)) %>%
+#     pull(Gnrc_Name)
+
+# # Add uncategorized generics to "Generic drug bank.csv"
+# # Empty generics table
+# empty_gen <- generics[0,]
+# 
+# # These are joins that are failing. Looks like the drugs aren't listed in the
+# # generics table. Probably because they were only used in years < 2019.
+# failed_joins <- pd2 %>%
+#     filter(is.na(Antibiotic)) %>%
+#     count(Gnrc_Name) %>%
+#     arrange(desc(n))
+# 
+# # Put name & n of generics that failed to join in the right format
+# failed_joins2 <- map_dfr(1:nrow(failed_joins), function(row) {
+#     current_row <- empty_gen[row,]
+#     current_row$Gnrc_Name <- failed_joins[row,]$Gnrc_Name
+#     current_row$n <- failed_joins[row,]$n
+#     current_row
+# })
+# 
+# # Join drugs that failed to join to generics table and write to bank
+# generics2 <- bind_rows(generics, failed_joins2)
+# write_csv(generics2, paste0(box_dir, "Generic drug bank.csv"))
+
+
+# Add up total antibiotic claims by prescriber & year
+clm_ant_yr <- pd2 %>%
+    filter(Antibiotic == 1) %>%
+    group_by(Prscrbr_NPI, year) %>%
+    summarize(
+        n_ant = sum(!is.na(Tot_Clms)),
+        tot_ant_clms = sum(Tot_Clms, an.rm = TRUE), .groups = "drop")
+
+# Is it feasible for a provider to have 866 antibiotic claims in a single year?
+summary(clm_ant_yr)
+clm_ant_yr %>% filter(tot_ant_clms == 866)
+
+# Join Tot_Benes from p_benes & compute claims / 1K benes
+clm_ant_yr_sum <- clm_ant_yr %>%
+    left_join(p_benes, by = c("Prscrbr_NPI", "year")) %>%
+    mutate(claims_1k = tot_ant_clms / (Tot_Benes / 1000)) %>%
+
+    # Summarize by year
+    group_by(year) %>%
+    summarize(
+        
+        # Rows missing claims_1k
+        n_miss = sum(is.na(claims_1k)),
+        
+        # Rows with claims_1k
+        n_prscrbr = sum(!is.na(claims_1k)),
+        
+        # Claims per 1K mean, sd, se
+        mean_claims_1k = mean(claims_1k, na.rm = TRUE),
+        sd_claims_1k = sd(claims_1k, na.rm = TRUE),
+        se_claims_1k = sd_claims_1k / sqrt(n_prscrbr), .groups = "drop")
+
+# Figure
+# NOTE that this data pattern is quite a bit different from when we rely on the
+# Antbtc_Tot_Clms col from the by-providers data. Result could change when I get
+# an updated generics table from Karl.
+clm_ant_yr_sum %>%
+    mutate(group = "group") %>%
+    ggplot(mapping = aes(x = year, y = mean_claims_1k, group = group)) +
+    geom_line() +
+    geom_errorbar(aes(ymin = mean_claims_1k - se_claims_1k,
+                      ymax = mean_claims_1k + se_claims_1k),
+                  width = 0.2, size = 0.4, color = "gray50") +
+    scale_x_continuous(breaks = seq(min(clm_ant_yr_sum$year),
+                                    max(clm_ant_yr_sum$year), 1)) +
+    scale_y_continuous(breaks = seq(420, 500, 20),
+                       limits = c(420, 510)) +
+    labs(x = "Year",
+         y = "Antibiotic claims\nper 1K\nbeneficiaries")
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### Turn the above into a function that takes a column in pd2 as input (e.g., Antibiotic, Tetracycline) and computes claims / 1K beneficiaries for it. ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+# Compute total claims per year for each prescriber for the input drug class
+claims_year <- function(drug_class) {
+    pd2 %>%
+        filter(!!sym(drug_class) == 1) %>%
+        group_by(Prscrbr_NPI, year) %>%
+        summarize(
+            n_drugs = sum(!is.na(Tot_Clms)),
+            tot_clms = sum(Tot_Clms, an.rm = TRUE), .groups = "drop") %>%
+        return()
+}
+
+# Function that takes the table output from claims_year() and computes claims
+# per 1K beneficiaries for each year in the data.
+claims_1k_summary <- function(table) {
+    table %>%
+        left_join(p_benes, by = c("Prscrbr_NPI", "year")) %>%
+        mutate(claims_1k = tot_clms / (Tot_Benes / 1000)) %>%
+        group_by(year) %>%
+        summarize(
+            n_miss = sum(is.na(claims_1k)),
+            n_prscrbr = sum(!is.na(claims_1k)),
+            mean_claims_1k = mean(claims_1k, na.rm = TRUE),
+            sd_claims_1k = sd(claims_1k, na.rm = TRUE),
+            se_claims_1k = sd_claims_1k / sqrt(n_prscrbr), .groups = "drop") %>%
+        return()
+}
+
+claims_1k_summary(table = x) %>%
+    mutate(group = "group") %>%
+    ggplot(mapping = aes(x = year, y = mean_claims_1k, group = group)) +
+    geom_line() +
+    geom_errorbar(aes(ymin = mean_claims_1k - se_claims_1k,
+                      ymax = mean_claims_1k + se_claims_1k),
+                  width = 0.2, size = 0.4, color = "gray50") +
+    scale_x_continuous(breaks = seq(min(clm_ant_yr_sum$year),
+                                    max(clm_ant_yr_sum$year), 1)) +
+    scale_y_continuous(breaks = seq(420, 500, 20),
+                       limits = c(420, 510)) +
+    labs(x = "Year",
+         y = "Antibiotic claims\nper 1K\nbeneficiaries")
+
+
+
+
+
+
+
+
+clm_prscrbr_yr <- pd2 %>%
+    filter(Antibiotic == 1) %>%
+    group_by(Prscrbr_NPI, year) %>%
+    summarize(
+        n_ant = sum(!is.na(Tot_Clms)),
+        tot_ant_clms = sum(Tot_Clms, an.rm = TRUE), .groups = "drop")
+
+# Is it feasible for a provider to have 866 antibiotic claims in a single year?
+summary(clm_ant_yr)
+clm_ant_yr %>% filter(tot_ant_clms == 866)
+
+# Join Tot_Benes from p_benes & compute claims / 1K benes
+clm_ant_yr_sum <- clm_ant_yr %>%
+    left_join(p_benes, by = c("Prscrbr_NPI", "year")) %>%
+    mutate(claims_1k = tot_ant_clms / (Tot_Benes / 1000)) %>%
+    
+    # Summarize by year
+    group_by(year) %>%
+    summarize(
+        
+        # Rows missing claims_1k
+        n_miss = sum(is.na(claims_1k)),
+        
+        # Rows with claims_1k
+        n_prscrbr = sum(!is.na(claims_1k)),
+        
+        # Claims per 1K mean, sd, se
+        mean_claims_1k = mean(claims_1k, na.rm = TRUE),
+        sd_claims_1k = sd(claims_1k, na.rm = TRUE),
+        se_claims_1k = sd_claims_1k / sqrt(n_prscrbr), .groups = "drop")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Antibiotic claims per 1K beneficiaries with at least one antibiotic claim
+# NOTE: A better measure might be antibiotic claims per 1K beneficiaries with at
+# least one *drug* claim. Would have to get this from the by-providers table.
+pd2 %>%
+    filter(Antibiotic == 1) %>%
+    group_by(Prscrbr_NPI, Antibiotic, year) %>%
+    summarize(Tot_Benes = sum(Tot_Benes, na.rm = TRUE),
+              Tot_Clms = sum(Tot_Clms, na.rm = TRUE), .groups = "drop") %>%
+    
+    # When the sums above are computed you can actually get values of 0 if all
+    # inputs are NA. Weird behavior! Eliminate all of those.
+    filter(Tot_Benes >= 11, Tot_Clms >= 11) %>%
+    mutate(benes_1k = Tot_Benes / 1000,
+           claims_1k = Tot_Clms / benes_1k) %>%
+    group_by(year) %>%
+    summarize(n = sum(!is.na(claims_1k)),
+              mean_claims_1k = mean(claims_1k, na.rm = TRUE),
+              sd_claims_1k = sd(claims_1k, na.rm = TRUE),
+              se_claims_1k = sd_claims_1k / sqrt(n), .groups = "drop") %>%
+    mutate(group = "group") %>%
+    ggplot(mapping = aes(x = year, y = mean_claims_1k, group = group)) +
+    geom_line() +
+    geom_errorbar(aes(ymin = mean_claims_1k - se_claims_1k,
+                      ymax = mean_claims_1k + se_claims_1k),
+                  width = 0.2, color = "gray50")
+        
+# Same for PCN-AminoPCN
+pd2 %>%
+    filter(`PCN-AminoPCN` == 1) %>%
+    group_by(Prscrbr_NPI, `PCN-AminoPCN`, year) %>%
+    summarize(Tot_Benes = sum(Tot_Benes, na.rm = TRUE),
+              Tot_Clms = sum(Tot_Clms, na.rm = TRUE), .groups = "drop") %>%
+    filter(Tot_Benes >= 11, Tot_Clms >= 11) %>%
+    mutate(benes_1k = Tot_Benes / 1000,
+           claims_1k = Tot_Clms / benes_1k) %>%
+    group_by(year) %>%
+    summarize(n = sum(!is.na(claims_1k)),
+              mean_claims_1k = mean(claims_1k, na.rm = TRUE),
+              sd_claims_1k = sd(claims_1k, na.rm = TRUE),
+              se_claims_1k = sd_claims_1k / sqrt(n), .groups = "drop") %>%
+    mutate(group = "group") %>%
+    ggplot(mapping = aes(x = year, y = mean_claims_1k, group = group)) +
+    geom_line() +
+    geom_errorbar(aes(ymin = mean_claims_1k - se_claims_1k,
+                      ymax = mean_claims_1k + se_claims_1k),
+                  width = 0.2, color = "gray50")
+
+# Cephalosporin
+pd2 %>%
+    filter(Cephalosporin == 1) %>%
+    group_by(Prscrbr_NPI, Cephalosporin, year) %>%
+    summarize(Tot_Benes = sum(Tot_Benes, na.rm = TRUE),
+              Tot_Clms = sum(Tot_Clms, na.rm = TRUE), .groups = "drop") %>%
+    filter(Tot_Benes >= 11, Tot_Clms >= 11) %>%
+    mutate(benes_1k = Tot_Benes / 1000,
+           claims_1k = Tot_Clms / benes_1k) %>%
+    group_by(year) %>%
+    summarize(n = sum(!is.na(claims_1k)),
+              mean_claims_1k = mean(claims_1k, na.rm = TRUE),
+              sd_claims_1k = sd(claims_1k, na.rm = TRUE),
+              se_claims_1k = sd_claims_1k / sqrt(n), .groups = "drop") %>%
+    mutate(group = "group") %>%
+    ggplot(mapping = aes(x = year, y = mean_claims_1k, group = group)) +
+    geom_line() +
+    geom_errorbar(aes(ymin = mean_claims_1k - se_claims_1k,
+                      ymax = mean_claims_1k + se_claims_1k),
+                  width = 0.2, color = "gray50")
+
+
+
+
+
+    
+    
+    
+    
+    
+    
+    
+    
+    # 
+
 
 
 
