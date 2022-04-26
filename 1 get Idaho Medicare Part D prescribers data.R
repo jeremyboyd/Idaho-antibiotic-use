@@ -3,9 +3,6 @@
 # available years of the by-provider & by-provider-and-drug datasets.
 
 # Get all versions (years) of medicare-part-d-prescribers-by-provider
-# NOTE: Resolve duplicate columns based on different spellings across years
-# PRSCRBR_NPI/Prscrbr_NPI, Prscrbr_zip5/Prscrbr_Zip5,
-# Prscrbr_Type_src/Prscrbr_Type_Src
 p_ver <- get_dataset_versions(
     dataset = "medicare-part-d-prescribers-by-provider")
 p <- get_data(version_table = p_ver)
