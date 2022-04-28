@@ -206,7 +206,7 @@ get_address_names <- function(input_table) {
                     Prscrbr_St2,
                     Prscrbr_City,
                     Prscrbr_State_Abrvtn,
-                    Prscrbr_zip5
+                    Prscrbr_Zip5
                 )
             ),
             

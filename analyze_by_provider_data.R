@@ -7,22 +7,26 @@
 # How do I add county? Is there a standardized way to go from zip code to county? Think I could get more location info from a Google place search, including county.
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-#### Read & organize Idaho 2019 providers-by-prescriber ####
+#### Add place names to Idaho 2019 providers-by-prescriber ####
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-# Read in data
-p <- read_feather("Idaho 2019 providers by prescriber data.feather")
+# Read in 2019 data
+p2019 <- read_feather("Idaho prescribers by provider data.feather") %>%
+    filter(year == 2019)
 
 # Make sure all addresses have been queried in Google Places API
-get_address_names(input_table = p)
+get_address_names(input_table = p2019)
 
 # Make sure bank is up-to-date with names from the zero results table
 zero <- read_csv("Zero address-name results from Idaho 2019 by-prescribers.csv")
 update_zero_results(zero_table = zero)
 
+# Read in bank for copying
+bank <- read_feather("Address-name bank.feather")
+
 # Create table with prescriber names, credentials, type, address, and address
 # name. This is for use in manually coding different types of prescribers.
-p2 <- p %>%
+p2019.2 <- p2019 %>%
     mutate(
         dataset_address = str_squish(
             paste(
@@ -30,23 +34,21 @@ p2 <- p %>%
                 Prscrbr_St2,
                 Prscrbr_City,
                 Prscrbr_State_Abrvtn,
-                Prscrbr_zip5
+                Prscrbr_Zip5
             )
         )) %>%
     left_join(bank %>%
                    select(dataset_address, name, status),
               by = "dataset_address") %>%
-    select(PRSCRBR_NPI:Prscrbr_Crdntls, Prscrbr_Type, dataset_address,
+    select(Prscrbr_NPI:Prscrbr_Crdntls, Prscrbr_Type, dataset_address,
            address_name = name, status)
-write_feather(p2, "Idaho 2019 providers by prescriber data with names.feather")
-
-# Read in bank for copying
-bank <- read_feather("Address-name bank.feather")
+write_feather(p2019.2,
+              "Idaho 2019 providers by prescriber data with names.feather")
 
 # CSV versions of the bank and Idaho 2019 with names saved to Box
 box_dir <- "~/Library/CloudStorage/Box-Box/IDHW_2022_Idaho_Antibiotic_project/"
 write_csv(bank, paste0(box_dir, "Address-name bank.csv"))
-write_csv(p2, paste0(
+write_csv(p2019.2, paste0(
     box_dir,
     "Idaho 2019 providers by prescriber data with address names.csv"))
 
