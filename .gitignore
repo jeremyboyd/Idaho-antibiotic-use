@@ -11,3 +11,4 @@ renv
 *.pdf
 test_place_names_acc
 .DS_Store
+*.html
