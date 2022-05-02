@@ -1,0 +1,299 @@
+---
+title: "Figures and tables for Idaho antibiotic use project"
+author: "Jeremy Boyd"
+date: "5/2/2022"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r figures, echo = FALSE, error = FALSE, message = FALSE}
+
+# Read in by-providers data
+p <- read_feather("Idaho prescribers by provider data.feather")
+
+# Compute weighted & unweighted summary tables by year
+year_wt <- summarize_provider_data(providers_data = p,
+                                   type = "weighted")
+year_unwt <- summarize_provider_data(providers_data = p,
+                                   type = "unweighted")
+
+# Compare weighted and unweighted
+# Number of providers
+bind_rows(year_wt, year_unwt) %>%
+    ggplot(mapping = aes(x = year, y = n_providers, color = type,
+           group = type)) +
+    geom_line()
+
+# Mean beneficiary count. These are identical, so lines are overplotted.
+bind_rows(year_wt, year_unwt) %>%
+    ggplot(mapping = aes(x = year, y = mean_ben_cnt, color = type,
+                         group = type)) +
+    geom_line() +
+    geom_errorbar(aes(ymin = mean_ben_cnt - sd_ben_cnt,
+                      ymax = mean_ben_cnt + sd_ben_cnt),
+                  width = 0.2,
+                  size = 0.5)
+
+# Beneficiary age
+pd <- position_dodge(0.25)
+bind_rows(year_wt, year_unwt) %>%
+    ggplot(mapping = aes(x = year, y = mean_ben_age, color = type,
+                         group = type)) +
+    geom_line(position = pd) +
+    geom_errorbar(aes(ymin = mean_ben_age - sd_ben_age,
+                      ymax = mean_ben_age + sd_ben_age),
+                  position = pd,
+                  width = 0.2,
+                  size = 0.2)
+
+# Percent female
+bind_rows(year_wt, year_unwt) %>%
+    ggplot(mapping = aes(x = year, y = mean_percent_fem, color = type,
+                         group = type)) +
+    geom_line(position = pd)
+
+# Mean HCC
+pd <- position_dodge(0.25)
+bind_rows(year_wt, year_unwt) %>%
+    ggplot(mapping = aes(x = year, y = mean_hcc, color = type,
+                         group = type)) +
+    geom_line(position = pd) +
+    geom_errorbar(aes(ymin = mean_hcc - sd_hcc,
+                      ymax = mean_hcc + sd_hcc),
+                  position = pd,
+                  width = 0.2,
+                  size = 0.2)
+
+# Mean number of antibiotic claims
+pd <- position_dodge(0.25)
+bind_rows(year_wt, year_unwt) %>%
+    ggplot(mapping = aes(x = year, y = mean_ant_clms, color = type,
+                         group = type)) +
+    geom_line(position = pd) +
+    geom_errorbar(aes(ymin = mean_ant_clms - sd_ant_clms,
+                      ymax = mean_ant_clms + sd_ant_clms),
+                  position = pd,
+                  width = 0.2,
+                  size = 0.2)
+
+# Mean antibiotic claims per 1K beneficiaries
+pd <- position_dodge(0.25)
+bind_rows(year_wt, year_unwt) %>%
+    ggplot(mapping = aes(x = year, y = mean_ant_clms_1k, color = type,
+                         group = type)) +
+    geom_line(position = pd) +
+    geom_errorbar(aes(ymin = mean_ant_clms_1k - sd_ant_clms_1k,
+                      ymax = mean_ant_clms_1k + sd_ant_clms_1k),
+                  position = pd,
+                  width = 0.2,
+                  size = 0.2)
+```
+
+<br>
+<br>
+
+### Weighted beneficiary statistics by year
+
+```{r tables, echo = FALSE, error = FALSE, message = FALSE}
+
+# Example slide 11 table
+# Turn this into a function to make this table. First col in table is the "by" variable--could be years, provider types, provider gender, etc.
+year_wt %>%
+    arrange(desc(year)) %>%
+    mutate(
+        mean_ben_cnt = paste0(
+            format(mean_ben_cnt, nsmall = 2, digits = 2, big.mark = ","),
+            " (",
+            format(sd_ben_cnt, nsmall = 2, digits = 2, big.mark = ","),
+            ")"),
+        ben_cnt_range = paste0(
+            format(min_ben_cnt, nsmall = 0, digits = 2, big.mark = ","),
+            "-",
+            format(max_ben_cnt, nsmall = 0, digits = 2, big.mark = ",")),
+        mean_ben_age = paste0(
+            format(mean_ben_age, nsmall = 2, digits = 2, big.mark = ","),
+            " (",
+            format(sd_ben_age, nsmall = 2, digits = 2, big.mark = ","),
+            ")"),
+        mean_percent_fem = format(mean_percent_fem, nsmall = 1, digits = 2),
+        mean_hcc = paste0(
+            format(mean_hcc, nsmall = 2, digits = 2, big.mark = ","),
+            " (",
+            format(sd_hcc, nsmall = 2, digits = 2, big.mark = ","),
+            ")"),
+        hcc_range = paste0(
+            format(min_hcc, nsmall = 2, digits = 2, big.mark = ","),
+            "-",
+            format(max_hcc, nsmall = 2, digits = 2, big.mark = ","))) %>%
+    select(year, mean_ben_cnt, ben_cnt_range, mean_ben_age, mean_percent_fem, mean_hcc,
+           hcc_range) %>%
+    datatable(
+        options = list(dom = "t"),
+        rownames = FALSE,
+              colnames = c("Year", "Mean (SD) Beneficiary Count", "Range Beneficiary Count", "Mean (SD) Beneficiary Age", "Sex (% Female)", "Mean (SD) Beneficiary HCC Score", "Range Beneficiary HCC Score"))
+
+```
+
+<br>
+<br>
+
+### Weighted antibiotic use statistics by year
+
+```{r, echo = FALSE, error = FALSE, message = FALSE}
+# Example slide 12
+year_wt %>%
+    arrange(desc(year)) %>%
+    mutate(
+        mean_ant_clms = paste0(
+            format(mean_ant_clms, nsmall = 2, digits = 2, big.mark = ","),
+            " (",
+            format(sd_ant_clms, nsmall = 2, digits = 2, big.mark = ","),
+            ")"),
+        mean_ben_cnt = paste0(
+            format(mean_ben_cnt, nsmall = 2, digits = 2, big.mark = ","),
+            " (",
+            format(sd_ben_cnt, nsmall = 2, digits = 2, big.mark = ","),
+            ")"),
+        mean_ant_clms_1k = paste0(
+            format(mean_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+            " (",
+            format(sd_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+            ")"),
+        range_ant_clms_1k = paste0(
+            format(min_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+            "-",
+            format(max_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","))
+    ) %>%
+    select(year, mean_ant_clms, mean_ben_cnt, mean_ant_clms_1k, range_ant_clms_1k) %>%
+    datatable(
+        options = list(dom = "t"),
+        rownames = FALSE,
+              colnames = c("Year", "Mean (SD) Antibiotic Claims", "Mean (SD) Beneficiary Count", "Mean Antibiotic Claims / 1K Beneficiaries", "Range Antibiotic Claims / 1K Beneficiaries"))
+
+```
+
+<br>
+<br>
+
+### Weighted 2019 beneficiary statistics by prescriber type
+
+```{r, echo = FALSE, error = FALSE, message = FALSE}
+
+# Example breakout
+# For this example, take the 10 most common values for prescriber type and show breakout for 2019 data only.
+top_ten <- p %>% count(Prscrbr_Type) %>%
+    arrange(desc(n)) %>%
+    filter(row_number() %in% 1:10) %>%
+    pull(Prscrbr_Type)
+
+# Compute weighted values by provider type
+prscrbr_type_2019 <- summarize_provider_data(
+    providers_data = p %>%
+        filter(year == 2019,
+               Prscrbr_Type %in% top_ten),
+    grouping_var = "Prscrbr_Type",
+    type = "weighted") %>%
+    arrange(desc(n_providers))
+
+# Table describing beneficiaries by prescriber type
+prscrbr_type_2019 %>% 
+    arrange(desc(mean_ben_cnt)) %>%
+    mutate(
+        mean_ben_cnt = paste0(
+            format(mean_ben_cnt, nsmall = 2, digits = 2, big.mark = ","),
+            " (",
+            format(sd_ben_cnt, nsmall = 2, digits = 2, big.mark = ","),
+            ")"),
+        ben_cnt_range = paste0(
+            format(min_ben_cnt, nsmall = 0, digits = 2, big.mark = ","),
+            "-",
+            format(max_ben_cnt, nsmall = 0, digits = 2, big.mark = ",")),
+        mean_ben_age = paste0(
+            format(mean_ben_age, nsmall = 2, digits = 2, big.mark = ","),
+            " (",
+            format(sd_ben_age, nsmall = 2, digits = 2, big.mark = ","),
+            ")"),
+        mean_percent_fem = format(mean_percent_fem, nsmall = 1, digits = 2),
+        mean_hcc = paste0(
+            format(mean_hcc, nsmall = 2, digits = 2, big.mark = ","),
+            " (",
+            format(sd_hcc, nsmall = 2, digits = 2, big.mark = ","),
+            ")"),
+        hcc_range = paste0(
+            format(min_hcc, nsmall = 2, digits = 2, big.mark = ","),
+            "-",
+            format(max_hcc, nsmall = 2, digits = 2, big.mark = ","))) %>%
+    select(Prscrbr_Type, mean_ben_cnt, ben_cnt_range, mean_ben_age, mean_percent_fem, mean_hcc,
+           hcc_range) %>%
+    datatable(
+        options = list(dom = "t"),
+        rownames = FALSE,
+              colnames = c("Prescriber Type", "Mean (SD) Beneficiary Count", "Range Beneficiary Count", "Mean (SD) Beneficiary Age", "Sex (% Female)", "Mean (SD) Beneficiary HCC Score", "Range Beneficiary HCC Score"))
+
+```
+
+<br>
+<br>
+
+### Weighted 2019 antibiotic use statistics by prescriber type
+
+```{r, echo = FALSE, error = FALSE, message = FALSE}
+
+# Table describing antibiotic prescribing by provider type
+prscrbr_type_2019 %>% 
+    arrange(desc(mean_ant_clms_1k)) %>%
+    mutate(
+        mean_ant_clms = paste0(
+            format(mean_ant_clms, nsmall = 2, digits = 2, big.mark = ","),
+            " (",
+            format(sd_ant_clms, nsmall = 2, digits = 2, big.mark = ","),
+            ")"),
+        mean_ben_cnt = paste0(
+            format(mean_ben_cnt, nsmall = 2, digits = 2, big.mark = ","),
+            " (",
+            format(sd_ben_cnt, nsmall = 2, digits = 2, big.mark = ","),
+            ")"),
+        mean_ant_clms_1k = paste0(
+            format(mean_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+            " (",
+            format(sd_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+            ")"),
+        range_ant_clms_1k = paste0(
+            format(min_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+            "-",
+            format(max_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","))
+    ) %>%
+    select(Prscrbr_Type, mean_ant_clms, mean_ben_cnt, mean_ant_clms_1k, range_ant_clms_1k) %>%
+    datatable(
+        options = list(dom = "t"),
+        rownames = FALSE,
+              colnames = c("Prescriber Type", "Mean (SD) Antibiotic Claims", "Mean (SD) Beneficiary Count", "Mean Antibiotic Claims / 1K Beneficiaries", "Range Antibiotic Claims / 1K Beneficiaries"))
+
+```
+
+<br>
+<br>
+
+### Same table as above, produced by kable()
+
+```{r, echo = FALSE, error = FALSE, message = FALSE}
+
+prscrbr_type_2019 %>%
+    arrange(desc(mean_ant_clms_1k)) %>%
+    mutate(
+        range_ant_clms_1k = paste0(
+            format(min_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+            "-",
+            format(max_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","))
+    ) %>%
+    select(Prscrbr_Type, mean_ant_clms, mean_ben_cnt, mean_ant_clms_1k, range_ant_clms_1k) %>%
+    kable(digits = 2,
+          row.names = FALSE,
+          col.names = c("Prescriber Type", "Mean (SD) Antibiotic Claims", "Mean (SD) Beneficiary Count", "Mean Antibiotic Claims / 1K Beneficiaries", "Range Antibiotic Claims / 1K Beneficiaries"),
+          align = "l")
+
+```
+
