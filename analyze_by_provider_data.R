@@ -116,34 +116,20 @@ p_claims_1k_sum %>%
 # Read in by provider & drug dataset
 pd <- read_feather("Idaho prescribers by provider & drug data.feather")
 
-# Table of generic drugs with coding for antibiotic and antibiotic type. Right
-# now I'm reading from an Excel version Karl has been editing. Once he's done,
-# save as "Generic drug bank.csv". As of today (4/28), he's completed all coding
-# for the Antibiotic column. As expected, since there are now more drugs coded
-# as antibiotic, we get more claims / 1K beneficiaries, versus when we only have
-# the 2019 drugs coded for antibiotic status.
-# generics <- read_csv(paste0(box_dir, "Generic drug bank.csv")) %>%
-generics <- read_xlsx(paste0(box_dir, "Generic drug bank_kmk.xlsx"),
-                      na = "NA") %>%
-
-    # Only keep rows that have been coded
-    filter(!is.na(Antibiotic)) %>%
-    
-    # Get rid of any extra whitespace in character cols. This can cause joins to
-    # fail later.
-    mutate(across(where(is.character), ~ str_squish(.)))
+# Read in generic drug bank
+generics <- read_feather("Generic drug bank.feather")
 
 # Both of the following tables are needed to run claims_year() and
 # claims_1k_summary(). pd2 is the source for numerators in the claims per 1K
 # beneficiary computation; p_benes is the source for denominators.
 pd2 <- pd %>%
     left_join(generics, by = "Gnrc_Name") %>%
-    select(Prscrbr_NPI, year, Gnrc_Name, Tot_Clms, `Anti-Infective`:Other)
+    select(Prscrbr_NPI, year, Gnrc_Name, Tot_Clms, Antibiotic:Other)
 p_benes <- p %>%
     select(Prscrbr_NPI, year, Tot_Benes)
 
 # Drug classes that we want to compute claims per 1K beneficiaries for
-drug_classes <- names(generics)[4:length(names(generics))]
+drug_classes <- names(generics)[2:length(names(generics))]
 
 # Loop over drug classes
 pd_claims_1k_sum <- map_dfr(drug_classes, function(class) {
@@ -158,46 +144,6 @@ pd_claims_1k_sum <- map_dfr(drug_classes, function(class) {
         "Antibiotic (numerator from prescriber & drug table)",
         class))
 
-# Figure
-# This figure could be improved by jittering datapoints & errorbars, and
-# replacing the legend with labels for each line.
-pd_claims_1k_sum %>%
-    ggplot(mapping = aes(x = year,
-                         y = mean,
-                         group = class,
-                         color = class)) +
-    geom_line() +
-    geom_errorbar(aes(ymin = mean - se,
-                      ymax = mean + se),
-                  width = 0.2, size = 0.4, color = "gray50") +
-    scale_x_continuous(breaks = seq(min(claims_1k_sum$year),
-                                  max(claims_1k_sum$year), 1)) +
-    labs(x = "Year",
-         y = "Claims per\n1K beneficiaries",
-         color = "Class")
-
-# Faceted claims per 1K beneficiaries, all classes
-bind_rows(pd_claims_1k_sum, p_claims_1k_sum) %>%
-    mutate(class = str_wrap(class, 30),
-           class = fct_relevel(class, "Other", after = Inf)) %>%
-    ggplot(mapping = aes(x = year,
-                         y = mean,
-                         group = class,
-                         color = class)) +
-    geom_errorbar(aes(ymin = mean - se,
-                      ymax = mean + se),
-                  width = 0.2, size = 0.4, color = "gray50") +
-    geom_line() +
-    scale_x_continuous(breaks = seq(min(claims_1k_sum$year),
-                                    max(claims_1k_sum$year), 2)) +
-    scale_y_continuous(breaks = seq(0, 1000, 100)) +
-    facet_wrap(~ class, ncol = 5) +
-    labs(x = "Year",
-         y = "Claims per\n1K beneficiaries",
-         color = "Class") +
-    theme(legend.position = "none")
-ggsave(paste0(box_dir, "figures/Claims per 1K beneficiaries, all classes.png"))
-
 # Faceted claims per 1K beneficiaries, antibiotics
 bind_rows(pd_claims_1k_sum, p_claims_1k_sum) %>%
     mutate(class = str_wrap(class, 30)) %>%
@@ -210,8 +156,8 @@ bind_rows(pd_claims_1k_sum, p_claims_1k_sum) %>%
                       ymax = mean + se),
                   width = 0.2, size = 0.4, color = "gray50") +
     geom_line() +
-    scale_x_continuous(breaks = seq(min(claims_1k_sum$year),
-                                    max(claims_1k_sum$year), 1)) +
+    scale_x_continuous(breaks = seq(min(pd_claims_1k_sum$year),
+                                    max(pd_claims_1k_sum$year), 1)) +
     facet_wrap(~ class) +
     labs(x = "Year",
          y = "Claims per\n1K beneficiaries",
@@ -223,44 +169,99 @@ ggsave(paste0(box_dir, "figures/Claims per 1K beneficiaries, antibiotics.png"))
 #### Model claims_1k ~ year ####
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-# Antibiotic claims by prescriber & year
-ant_cl_1k <- claims_year(drug_class = "Antibiotic") %>%
-    left_join(p_benes, by = c("Prscrbr_NPI", "year")) %>%
-    mutate(claims_1k = tot_clms / (Tot_Benes / 1000),
-           log_claims_1k = log(claims_1k))
+# Table of claims_1k by provider & year with claims from by-provider-and-drug
+# and beneficiaries from by-provider.
+pd_claims_1k <- map_dfr(drug_classes, function(class) {
+    message(paste0("Getting claim & beneficiary data for class ", class, "..."))
+    claims_year(drug_class = class) %>%
+        left_join(p_benes, by = c("Prscrbr_NPI", "year")) %>%
+        mutate(claims_1k = tot_clms / (Tot_Benes / 1000),
+               log_claims_1k = log(claims_1k),
+               class = class)
+}) 
 
-# Visualize with fit lines
-ant_cl_1k %>%
-    ggplot(aes(x = year, y = claims_1k)) +
-    geom_smooth(method = lm) +
-    labs(x = "Year",
-         y = "Claims per\n1K beneficiaries",
-         color = "Class")
-ant_cl_1k %>%
-    ggplot(aes(x = year, y = log_claims_1k)) +
-    geom_smooth(method = lm) +
-    labs(x = "Year",
-         y = "Claims per\n1K beneficiaries",
-         color = "Class")
-
-# What does the distribution look like? Not normal--long tail to the right.
-ant_cl_1k %>%
+# I'm logging claims_1k because it's much closer to normal then. See these
+# examples of unlogged versus logged claims_1k for antibiotics.
+pd_claims_1k %>%
+    filter(class == "Antibiotic") %>%
     ggplot(mapping = aes(x = claims_1k)) +
     geom_density()
-
-# Looks better with log transform
-ant_cl_1k %>%
+pd_claims_1k %>%
+    filter(class == "Antibiotic") %>%
     ggplot(mapping = aes(x = log_claims_1k)) +
     geom_density()
 
-# Marginal decrease in claims per 1k beneficiaries over time, p = 0.051.
-cl_1k_fit1 <- lm(claims_1k ~ year, data = ant_cl_1k)
-summary(cl_1k_fit1)
+# Model log_claims_1k ~ year for all classes
+year_effects <- map_dfr(drug_classes, function(class) {
+    class_data <- pd_claims_1k %>%
+        filter(class == !!class)
+    lm(log_claims_1k ~ year, data = class_data) %>%
+    tidy() %>%
+    mutate(class = class)
+}) %>%
+    mutate(
+        `p < 0.05` = if_else(p.value < 0.05, 1L, 0L)) %>%
+    filter(term == "year") %>%
+    arrange(p.value)
+
+# Compute percent decrease from 2013 to 2019
+change <- pd_claims_1k_sum %>%
+    filter(year %in% c(min(pd_claims_1k_sum$year),
+                       max(pd_claims_1k_sum$year))) %>%
+    mutate(class = if_else(str_detect(class, "Antibiotic"),
+                           "Antibiotic", class)) %>%
+    select(year, mean, class) %>%
+    pivot_wider(names_from = "year", values_from = "mean") %>%
+    mutate(percent_decrease = (`2013` - `2019`) / `2013` * 100)
+
+# Plot claims_1k ~ year, with annotations showing percent decrease and p-values
+# for statsig decreases.
+pd_claims_1k %>%
+    group_by(year, class) %>%
+    summarize(
+        n_miss = sum(is.na(claims_1k)),
+        n_prscrbr = sum(!is.na(claims_1k)),
+        mean = mean(claims_1k, na.rm = TRUE),
+        sd = sd(claims_1k, na.rm = TRUE),
+        se = sd / sqrt(n_prscrbr), .groups = "drop") %>%
+    left_join(year_effects, by = "class") %>%
+    left_join(change %>%
+                  select(class, percent_decrease), by = "class") %>%
+    mutate(class2 = if_else(`p < 0.05` == 1,
+                            paste0(
+                                class, "\n",
+                                round(percent_decrease),
+                                "% decrease\n",
+                                "p = ",
+                                format(p.value, scientific = TRUE,
+                                       digits = 3)),
+                            class),
+           class2 = fct_relevel(class2, "Other", after = Inf)) %>%
+    ggplot(mapping = aes(x = year,
+                         y = mean,
+                         group = class2,
+                         color = class2)) +
+    geom_errorbar(aes(ymin = mean - se,
+                      ymax = mean + se),
+                  width = 0.2, size = 0.4, color = "gray50") +
+    geom_line() +
+    scale_x_continuous(breaks = seq(min(pd_claims_1k_sum$year),
+                                    max(pd_claims_1k_sum$year), 2)) +
+    scale_y_continuous(breaks = seq(0, 1000, 100)) +
+    facet_wrap(~ class2, ncol = 4) +
+    labs(x = "Year",
+         y = "Claims per\n1K beneficiaries",
+         color = "Class") +
+    theme(legend.position = "none")
+ggsave(paste0(box_dir, "figures/Claims per 1K beneficiaries, all classes, year effects.png"))
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### Hierarchical models of claims_1k ~ year ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 # Really should be a growth curve model with clusters for Prscrbr_NPI. This
 # version throws a singularity warning. Try bayesian fit.
-library(lmerTest)
-cl_1k_fit_fit2 <- lmer(log_claims_1k ~ year + (year | Prscrbr_NPI),
+cl_1k_fit_fit2 <- lmer(log_claims_1k ~ year_c + (year_c | Prscrbr_NPI),
                        data = ant_cl_1k)
 summary(cl_1k_fit_fit2)
 
@@ -270,11 +271,22 @@ summary(cl_1k_fit_fit2)
 # Results so far show a reliable negative effect of year--i.e., as year
 # increases, log(claims_1k) goes down. Can also try lognormal family and logt
 # model.
-library(brms)
+
+# Specify priors
+claims_priors <- c(
+    prior(normal(6, 2), class = Intercept),
+    prior(normal(0, 1), class = b),
+    prior(cauchy(0, 1), class = sd),
+    prior(lkj(2), class = cor)
+)
+
+# Fit
 cl_1k_fit3 <- brm(
-    log_claims_1k ~ year + (year | Prscrbr_NPI),
+    log_claims_1k ~ year_c + (year_c | Prscrbr_NPI),
     data = ant_cl_1k,
-    family = gaussian(),
+    prior = claims_priors,
+    # family = gaussian(),
+    family = student(),
     control = list(adapt_delta = 0.95),
     chains = 4,
     iter = 2000,
@@ -308,16 +320,6 @@ sum(is.na(p$Tot_Benes)) / nrow(p)
 
 
 
-p %>%
-    filter(year == 2017) %>%
-    summarize(weighted.mean(x = Bene_Avg_Age, w = Tot_Benes, na.rm = TRUE))
-
-
-p %>%
-    filter(year == 2019) %>%
-    filter(!is.na(Tot_Benes)) %>%
-    select(Bene_Avg_Age, Tot_Benes) %>%
-    summary()
 
 
 
