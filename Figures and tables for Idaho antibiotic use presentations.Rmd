@@ -11,6 +11,10 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r figures, echo = FALSE, error = FALSE, message = FALSE}
 
+
+# UPDATE TO USE NUMERATORS FROM PD DATA
+
+
 # Read in by-providers data
 p <- read_feather("Idaho prescribers by provider data.feather")
 
@@ -142,6 +146,8 @@ year_wt %>%
 
 ### Weighted antibiotic use statistics by year
 
+Note: In this table and all of the tables below, claims quantities are coming from the by-provider data. For consistency, should recompute using claims from by-provider-and-drug.
+
 ```{r, echo = FALSE, error = FALSE, message = FALSE}
 # Example slide 12
 year_wt %>%
@@ -182,20 +188,17 @@ year_wt %>%
 
 ```{r, echo = FALSE, error = FALSE, message = FALSE}
 
-# Example breakout
-# For this example, take the 10 most common values for prescriber type and show breakout for 2019 data only.
-top_ten <- p %>% count(Prscrbr_Type) %>%
-    arrange(desc(n)) %>%
-    filter(row_number() %in% 1:10) %>%
-    pull(Prscrbr_Type)
+# Bank of prescriber types
+types <- read_feather("Idaho 2019 provider type bank.feather")
 
-# Compute weighted values by provider type
+# Compute weighted values by Karl's Standard_Provider_Type
 prscrbr_type_2019 <- summarize_provider_data(
     providers_data = p %>%
-        filter(year == 2019,
-               Prscrbr_Type %in% top_ten),
-    grouping_var = "Prscrbr_Type",
+        filter(year == 2019) %>%
+        left_join(types, by = "Prscrbr_Type"),
+    grouping_var = "Standard_Provider_Type",
     type = "weighted") %>%
+    mutate(Prscrbr_Type = Standard_Provider_Type) %>%
     arrange(desc(n_providers))
 
 # Table describing beneficiaries by prescriber type
@@ -229,7 +232,7 @@ prscrbr_type_2019 %>%
     select(Prscrbr_Type, mean_ben_cnt, ben_cnt_range, mean_ben_age, mean_percent_fem, mean_hcc,
            hcc_range) %>%
     datatable(
-        options = list(dom = "t"),
+        # options = list(dom = "t"),
         rownames = FALSE,
               colnames = c("Prescriber Type", "Mean (SD) Beneficiary Count", "Range Beneficiary Count", "Mean (SD) Beneficiary Age", "Sex (% Female)", "Mean (SD) Beneficiary HCC Score", "Range Beneficiary HCC Score"))
 
@@ -268,32 +271,35 @@ prscrbr_type_2019 %>%
     ) %>%
     select(Prscrbr_Type, mean_ant_clms, mean_ben_cnt, mean_ant_clms_1k, range_ant_clms_1k) %>%
     datatable(
-        options = list(dom = "t"),
+        # options = list(dom = "t"),
         rownames = FALSE,
               colnames = c("Prescriber Type", "Mean (SD) Antibiotic Claims", "Mean (SD) Beneficiary Count", "Mean Antibiotic Claims / 1K Beneficiaries", "Range Antibiotic Claims / 1K Beneficiaries"))
 
 ```
 
-<br>
-<br>
 
-### Same table as above, produced by kable()
+
 
 ```{r, echo = FALSE, error = FALSE, message = FALSE}
 
-prscrbr_type_2019 %>%
-    arrange(desc(mean_ant_clms_1k)) %>%
-    mutate(
-        range_ant_clms_1k = paste0(
-            format(min_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
-            "-",
-            format(max_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","))
-    ) %>%
-    select(Prscrbr_Type, mean_ant_clms, mean_ben_cnt, mean_ant_clms_1k, range_ant_clms_1k) %>%
-    kable(digits = 2,
-          row.names = FALSE,
-          col.names = c("Prescriber Type", "Mean (SD) Antibiotic Claims", "Mean (SD) Beneficiary Count", "Mean Antibiotic Claims / 1K Beneficiaries", "Range Antibiotic Claims / 1K Beneficiaries"),
-          align = "l")
+# <br>
+# <br>
+
+### Same table as above, produced by kable()
+
+# prscrbr_type_2019 %>%
+#     arrange(desc(mean_ant_clms_1k)) %>%
+#     mutate(
+#         range_ant_clms_1k = paste0(
+#             format(min_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+#             "-",
+#             format(max_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","))
+#     ) %>%
+#     select(Prscrbr_Type, mean_ant_clms, mean_ben_cnt, mean_ant_clms_1k, range_ant_clms_1k) %>%
+#     kable(digits = 2,
+#           row.names = FALSE,
+#           col.names = c("Prescriber Type", "Mean (SD) Antibiotic Claims", "Mean (SD) Beneficiary Count", "Mean Antibiotic Claims / 1K Beneficiaries", "Range Antibiotic Claims / 1K Beneficiaries"),
+#           align = "l")
 
 ```
 
