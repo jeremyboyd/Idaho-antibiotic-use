@@ -9,9 +9,16 @@ library(readxl)
 library(radiant.data)       # For weighted.sd()
 library(DT)
 library(knitr)              # For kable()
+library(brms)
+library(lmerTest)
+library(rstan)
 
 # Resolve conflict for filter
 filter <- dplyr::filter
+
+# For fitting bayesian models
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
 
 # Google API key
 api_key <- Sys.getenv("GOOGLE_API_KEY")
