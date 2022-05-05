@@ -361,13 +361,13 @@ update_zero_results <- function(zero_table) {
 # Given an input drug class from "Generic drug bank.csv" (e.g., Antibiotics,
 # Tetracycline), compute total claims per year for each prescriber using the
 # Medicare Part D provider by prescriber and drug data.
-claims_year <- function(drug_class) {
-    pd2 %>%
+claims_year <- function(data, drug_class) {
+    data %>%
         filter(!!sym(drug_class) == 1) %>%
         group_by(Prscrbr_NPI, year) %>%
         summarize(
             n_drugs = sum(!is.na(Tot_Clms)),
-            tot_clms = sum(Tot_Clms, an.rm = TRUE), .groups = "drop") %>%
+            tot_clms = sum(Tot_Clms, na.rm = TRUE), .groups = "drop") %>%
         return()
 }
 
@@ -375,20 +375,20 @@ claims_year <- function(drug_class) {
 #### claims_1k_summary() ####
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-# Given an output table from claims_year(), compute claims per 1K beneficiaries
-# for each year represented in the data. Note that p_benes is the Medicare Part
-# D provider by prescribers dataset--just these cols: Prscrbr_NPI, year,
-# Tot_Benes.
-claims_1k_summary <- function(table) {
-    table %>%
-        left_join(p_benes, by = c("Prscrbr_NPI", "year")) %>%
-        mutate(claims_1k = tot_clms / (Tot_Benes / 1000)) %>%
+# Given an output table from claims_year(), compute weighted mean claims per 1K
+# beneficiaries for each year represented in the data.
+claims_1k_summary <- function(data, outcome_var) {
+    data %>%
         group_by(year) %>%
         summarize(
-            n_miss = sum(is.na(claims_1k)),
-            n_prscrbr = sum(!is.na(claims_1k)),
-            mean = mean(claims_1k, na.rm = TRUE),
-            sd = sd(claims_1k, na.rm = TRUE),
+            n_miss = sum(is.na(!!sym(outcome_var))),
+            n_prscrbr = sum(!is.na(!!sym(outcome_var))),
+            mean = weighted.mean(x = !!sym(outcome_var),
+                                 w = Tot_Benes_Imp,
+                                 na.rm = TRUE),
+            sd = weighted.sd(x = !!sym(outcome_var),
+                             wt = Tot_Benes_Imp,
+                             na.rm = TRUE),
             se = sd / sqrt(n_prscrbr), .groups = "drop") %>%
         return()
 }
@@ -408,49 +408,47 @@ summarize_provider_data <- function(providers_data,
     # Add grouping
     if(is.null(grouping_var)) {
         providers_data <- providers_data %>%
-            group_by(year)
+            group_by(year, class)
     } else {
         providers_data <- providers_data %>%
-            group_by(year, !!sym(grouping_var))
+            group_by(year, class, !!sym(grouping_var))
     }
     
     # Compute weighted means
     if(type == "weighted") {
         providers_data %>%
-            filter(!is.na(Tot_Benes)) %>%
-            mutate(percent_fem = Bene_Feml_Cnt / Tot_Benes * 100,
-                   ant_clms_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000)) %>%
+            filter(!is.na(Tot_Benes_Imp)) %>%
             summarize(n_providers = sum(!is.na(Prscrbr_NPI)),
                       mean_ben_cnt = mean(
-                          Tot_Benes,
+                          Tot_Benes_Imp,
                           na.rm = TRUE),
                       sd_ben_cnt = sd(
-                          Tot_Benes,
+                          Tot_Benes_Imp,
                           na.rm = TRUE),
                       min_ben_cnt = min(
-                          Tot_Benes,
+                          Tot_Benes_Imp,
                           na.rm = TRUE),
                       max_ben_cnt = max(
-                          Tot_Benes,
+                          Tot_Benes_Imp,
                           na.rm = TRUE),
                       mean_ben_age = weighted.mean(
                           x = Bene_Avg_Age,
-                          w = Tot_Benes,
+                          w = Tot_Benes_Imp,
                           na.rm = TRUE),
                       sd_ben_age = weighted.sd(
                           x = Bene_Avg_Age,
-                          wt = Tot_Benes,
+                          wt = Tot_Benes_Imp,
                           na.rm = TRUE),
                       mean_percent_fem = weighted.mean(
                           x = percent_fem,
-                          w = Tot_Benes, na.rm = TRUE),
+                          w = Tot_Benes_Imp, na.rm = TRUE),
                       mean_hcc = weighted.mean(
                           x = Bene_Avg_Risk_Scre,
-                          w = Tot_Benes,
+                          w = Tot_Benes_Imp,
                           na.rm = TRUE),
                       sd_hcc = weighted.sd(
                           x = Bene_Avg_Risk_Scre,
-                          wt = Tot_Benes,
+                          wt = Tot_Benes_Imp,
                           na.rm = TRUE),
                       min_hcc = min(
                           Bene_Avg_Risk_Scre,
@@ -458,27 +456,27 @@ summarize_provider_data <- function(providers_data,
                       max_hcc = max(
                           Bene_Avg_Risk_Scre,
                           na.rm = TRUE),
-                      mean_ant_clms = weighted.mean(
-                          x = Antbtc_Tot_Clms,
-                          w = Tot_Benes,
+                      mean_clms = weighted.mean(
+                          x = tot_clms,
+                          w = Tot_Benes_Imp,
                           na.rm = TRUE),
-                      sd_ant_clms = weighted.sd(
-                          x = Antbtc_Tot_Clms,
-                          wt = Tot_Benes,
+                      sd_clms = weighted.sd(
+                          x = tot_clms,
+                          wt = Tot_Benes_Imp,
                           na.rm = TRUE),
-                      mean_ant_clms_1k = weighted.mean(
-                          x = ant_clms_1k,
-                          w = Tot_Benes,
+                      mean_clms_1k = weighted.mean(
+                          x = claims_1k_imp,
+                          w = Tot_Benes_Imp,
                           na.rm = TRUE),
-                      sd_ant_clms_1k = weighted.sd(
-                          x = ant_clms_1k,
-                          wt = Tot_Benes,
+                      sd_clms_1k = weighted.sd(
+                          x = claims_1k_imp,
+                          wt = Tot_Benes_Imp,
                           na.rm = TRUE),
-                      min_ant_clms_1k = min(
-                          ant_clms_1k,
+                      min_clms_1k = min(
+                          claims_1k_imp,
                           na.rm = TRUE),
-                      max_ant_clms_1k = max(
-                          ant_clms_1k,
+                      max_clms_1k = max(
+                          claims_1k_imp,
                           na.rm = TRUE),
                       .groups = "drop") %>%
             mutate(type = "weighted") %>%
@@ -487,20 +485,18 @@ summarize_provider_data <- function(providers_data,
     # Compute unweighted means
     } else if(type == "unweighted") {
         providers_data %>%
-            mutate(percent_fem = Bene_Feml_Cnt / Tot_Benes * 100,
-                   ant_clms_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000)) %>%
             summarize(n_providers = sum(!is.na(Prscrbr_NPI)),
                       mean_ben_cnt = mean(
-                          Tot_Benes,
+                          Tot_Benes_Imp,
                           na.rm = TRUE),
                       sd_ben_cnt = sd(
-                          Tot_Benes,
+                          Tot_Benes_Imp,
                           na.rm = TRUE),
                       min_ben_cnt = min(
-                          Tot_Benes,
+                          Tot_Benes_Imp,
                           na.rm = TRUE),
                       max_ben_cnt = max(
-                          Tot_Benes,
+                          Tot_Benes_Imp,
                           na.rm = TRUE),
                       mean_ben_age = mean(
                           x = Bene_Avg_Age,
@@ -523,23 +519,23 @@ summarize_provider_data <- function(providers_data,
                       max_hcc = max(
                           Bene_Avg_Risk_Scre,
                           na.rm = TRUE),
-                      mean_ant_clms = mean(
-                          x = Antbtc_Tot_Clms,
+                      mean_clms = mean(
+                          x = tot_clms,
                           na.rm = TRUE),
-                      sd_ant_clms = sd(
-                          x = Antbtc_Tot_Clms,
+                      sd_clms = sd(
+                          x = tot_clms,
                           na.rm = TRUE),
-                      mean_ant_clms_1k = mean(
-                          x = ant_clms_1k,
+                      mean_clms_1k = mean(
+                          x = claims_1k_imp,
                           na.rm = TRUE),
-                      sd_ant_clms_1k = sd(
-                          x = ant_clms_1k,
+                      sd_clms_1k = sd(
+                          x = claims_1k_imp,
                           na.rm = TRUE),
-                      min_ant_clms_1k = min(
-                          ant_clms_1k,
+                      min_clms_1k = min(
+                          claims_1k_imp,
                           na.rm = TRUE),
-                      max_ant_clms_1k = max(
-                          ant_clms_1k,
+                      max_clms_1k = max(
+                          claims_1k_imp,
                           na.rm = TRUE),
                       .groups = "drop") %>%
             mutate(type = "unweighted") %>%
