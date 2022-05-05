@@ -1,7 +1,7 @@
 ---
 title: "Figures and tables for Idaho antibiotic use project"
 author: "Jeremy Boyd"
-date: "5/2/2022"
+date: "`r Sys.Date()`"
 output: html_document
 ---
 
@@ -9,30 +9,224 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r figures, echo = FALSE, error = FALSE, message = FALSE}
+### Distribution of claims per 1K beneficiary
 
+- Second and fourth figures are claims_1k where missing beneficiary counts have been imputed.
+- Last two figures show that normality improves when claims_1k is logged.
 
-# UPDATE TO USE NUMERATORS FROM PD DATA
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### Compute claims / 1K beneficiaries ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-# Read in by-providers data
-p <- read_feather("Idaho prescribers by provider data.feather")
+# Tot_Clms: The number of Medicare Part D claims. This includes original
+# prescriptions and refills. Get this from by-provider-and-drug.
+# Tot_Benes: The total number of unique Medicare Part D beneficiaries with at
+# least one claim for the drug. Get this from by-provider. Definition "the drug"
+# is a bit misleading, since in the by-provider dataset we're getting a count of
+# beneficiaries who had a prescription for *any* drug.
 
-# Compute weighted & unweighted summary tables by year
-year_wt <- summarize_provider_data(providers_data = p,
-                                   type = "weighted")
-year_unwt <- summarize_provider_data(providers_data = p,
-                                   type = "unweighted")
+# Read in generic drug bank
+generics <- read_feather("Generic drug bank.feather")
 
+# Read in 2019 provider types
+p_types <- read_feather("Idaho 2019 provider type bank.feather")
+
+# Read in by-provider-and-drug dataset. This has claims numbers for computing
+# claims per 1K beneficiaries.
+pd <- read_feather("Idaho prescribers by provider & drug data.feather") %>%
+    
+    # Join in coding for drug classes from generics
+    left_join(generics, by = "Gnrc_Name") %>%
+    select(Prscrbr_NPI, year, Gnrc_Name, Tot_Clms, Antibiotic:Other)
+    
+# Read in by-provider dataset. This has beneficiary numbers for computing claims
+# per 1K beneficiaries. Join in prescriber type (only have this for 2019 so
+# far).
+p_benes <- read_feather("Idaho prescribers by provider data.feather") %>%
+    select(Prscrbr_NPI, year, Tot_Benes, Prscrbr_RUCA, Prscrbr_Type,
+           Bene_Avg_Age, Bene_Feml_Cnt, Bene_Avg_Risk_Scre) %>%
+    mutate(Tot_Benes_Imp = Tot_Benes) %>%
+    left_join(p_types, by = c("Prscrbr_Type", "year"))
+
+# Separate into tables based on whether Tot_Benes is defined or not
+yes_benes <- p_benes %>% filter(!is.na(Tot_Benes))
+no_benes <- p_benes %>% filter(is.na(Tot_Benes))
+
+# For NA values, impute
+# NOTE: Can we also impute values for other cols? Most of these are subject to
+# the > 10 beneficiary rule.
+set.seed(1)
+no_benes$Tot_Benes_Imp <- round(rnorm(n = nrow(no_benes), mean = 5.5, sd = 1.5))
+no_benes <- no_benes %>%
+    mutate(Tot_Benes_Imp = case_when(
+        Tot_Benes_Imp > 10 ~ 10,
+        Tot_Benes_Imp < 1 ~ 1,
+        TRUE ~ Tot_Benes_Imp))
+
+# Recombine to form p_benes with imputed values for NA Tot_Benes
+p_benes <- bind_rows(yes_benes, no_benes) %>%
+    mutate(percent_fem = Bene_Feml_Cnt / Tot_Benes_Imp * 100)
+
+# Drug classes that we want to compute claims per 1K beneficiaries for
+drug_classes <- names(generics)[2:length(names(generics))]
+
+# Summarize across drugs to get total claims per drug *class*. Join in
+# beneficiary data.
+pd_claims_1k <- map_dfr(drug_classes, function(class) {
+    message(paste0("Getting claim & beneficiary data for class ", class, "..."))
+    claims_year(data = pd, drug_class = class) %>%
+        left_join(p_benes, by = c("Prscrbr_NPI", "year")) %>%
+        mutate(claims_1k = tot_clms / (Tot_Benes_Imp / 1000),
+               log_claims_1k = log(claims_1k),
+               claims_1k_imp = tot_clms / (Tot_Benes_Imp / 1000),
+               log_claims_1k_imp = log(claims_1k_imp),
+               class = class)
+}) 
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### Model claims / 1K beneficiaries ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+# Use logged, imputed versions of claims 1k. Logged versions of claims_1k are
+# more normal. Versions of claims_1k with and without imputation for NAs have
+# nearly identical distributions.
+pd_claims_1k %>%
+    filter(class == "Antibiotic") %>%
+    ggplot(mapping = aes(x = claims_1k)) +
+    geom_density()
+pd_claims_1k %>%
+    filter(class == "Antibiotic") %>%
+    ggplot(mapping = aes(x = claims_1k_imp)) +
+    geom_density()
+pd_claims_1k %>%
+    filter(class == "Antibiotic") %>%
+    ggplot(mapping = aes(x = log_claims_1k)) +
+    geom_density()
+pd_claims_1k %>%
+    filter(class == "Antibiotic") %>%
+    ggplot(mapping = aes(x = log_claims_1k_imp)) +
+    geom_density()
+
+# Model log_claims_1k_imp ~ year for all classes..
+# NOTE that I'm using weights in all models to take into account that some
+# providers have more beneficiaries.
+year_effects <- map_dfr(drug_classes, function(class) {
+    class_data <- pd_claims_1k %>%
+        filter(class == !!class)
+    lm(log_claims_1k_imp ~ year,
+       data = class_data,
+       weights = Tot_Benes_Imp) %>%
+    tidy() %>%
+    mutate(class = class)
+}) %>%
+    mutate(
+        `p < 0.05` = if_else(p.value < 0.05, "*", "")) %>%
+    filter(term == "year") %>%
+    arrange(p.value)
+
+# Summarize across providers
+pd_claims_1k_sum <- map_dfr(drug_classes, function(class) {
+    message(paste0("Summarizing class ", class, "..."))
+    class_data <- pd_claims_1k %>%
+        filter(class == !!class)
+    claims_1k_summary(data = class_data, outcome_var = "claims_1k_imp") %>%
+        mutate(class = !!class)
+})
+
+# Compute percent decrease from 2013 to 2019
+change <- pd_claims_1k_sum %>%
+    filter(year %in% c(min(pd_claims_1k_sum$year),
+                       max(pd_claims_1k_sum$year))) %>%
+    select(year, mean, class) %>%
+    pivot_wider(names_from = "year", values_from = "mean") %>%
+    mutate(percent_decrease = (`2013` - `2019`) / `2013` * 100)
+
+```
+
+### Changes in claims per 1K beneficiaries over time
+
+- Beneficiary counts are NA for all counts < 11. This potentially biases the analysis by ignoring small providers.
+- To deal with potential bias, missing beneficiary counts were imputed as normal(mean = 5.5, sd = 1.5), with min = 1 and max = 10.
+- Computation of means and linear models use beneficiary counts as weights.
+- Models are of log(claims_1k).
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.height = 8, fig.width = 9}
+
+# Plot claims_1k ~ year, with annotations showing percent decrease and p-values
+# for statsig decreases.
+# NOTE: Using claims_1k_imp seems to lead to a couple more statsig results,
+# including an *increase* in the use of tetracycline.
+pd_claims_1k_sum %>%
+    left_join(year_effects, by = "class") %>%
+    left_join(change %>% select(class, percent_decrease), by = "class") %>%
+    mutate(class2 = case_when(
+        `p < 0.05` == "*" & percent_decrease > 0 ~ paste0(
+            class, "\n",
+            round(percent_decrease), "% decrease\n",
+            "p = ", format(p.value, scientific = TRUE, digits = 3)),
+        `p < 0.05` == "*" & percent_decrease < 0 ~  paste0(
+            class, "\n",
+            round(percent_decrease * -1), "% increase\n",
+            "p = ", format(p.value, scientific = TRUE, digits = 3)),
+        TRUE ~ class),
+        class2 = fct_relevel(class2,
+                             "Other",
+                             after = Inf)) %>%
+    ggplot(mapping = aes(x = year,
+                         y = mean,
+                         group = class2,
+                         color = class2)) +
+    geom_errorbar(aes(ymin = mean - se,
+                      ymax = mean + se),
+                  width = 0.2, size = 0.4, color = "gray50") +
+    geom_line() +
+    scale_x_continuous(breaks = seq(min(pd_claims_1k_sum$year),
+                                    max(pd_claims_1k_sum$year), 2)) +
+    scale_y_continuous(breaks = seq(0, 1000, 100),
+                       limits = c(0, 400)) +
+    facet_wrap(~ class2, ncol = 4) +
+    labs(x = "Year",
+         y = "Claims\nper 1K\nbeneficiaries",
+         color = "Class") +
+    theme(legend.position = "none")
+
+```
+
+### Weighted versus unweighted statistics
+
+- All figures are for class = Antibiotic.
+- Missing beneficiary counts are imputed.
+- Using unweighted seems to underestimate beneficiary age and HCC score, while overestimating mean claims per 1K beneficiaries.
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### Tables ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+# Use pd_claims_1k, which has claims from by-provider-and-drug, and beneficiary
+# counts from by-provider.
+year_class_wt <- summarize_provider_data(
+    providers_data = pd_claims_1k,
+    type = "weighted")
+year_class_unwt <- summarize_provider_data(
+    providers_data = pd_claims_1k,
+    type = "unweighted")
+    
 # Compare weighted and unweighted
-# Number of providers
-bind_rows(year_wt, year_unwt) %>%
+# Number of providers, antibiotics
+bind_rows(year_class_wt, year_class_unwt) %>%
+    filter(class == "Antibiotic") %>%
     ggplot(mapping = aes(x = year, y = n_providers, color = type,
            group = type)) +
     geom_line()
 
-# Mean beneficiary count. These are identical, so lines are overplotted.
-bind_rows(year_wt, year_unwt) %>%
+# Mean beneficiary count, antibiotics. These are identical, so lines are
+# overplotted. How does beneficiary count get higher in this version versus the one from May 2? Here I'm replacing NA Tot_Benes with values from 1-10, which are all small numbers. Seems like this should make the mean beneficiary count go down rather than up. Before I was using Tot_Benes from the by-provider table. This time I'm using it after joining to by-provider-and-drug. If I'm doing this correctly the beneficiary statistics should stat the same no matter what the drug class is because it's always the same info coming from the by-providers table. Check this...
+# Crap! changes with drug. What's going on...?
+bind_rows(year_class_wt, year_class_unwt) %>%
+    filter(class == "Antibiotic") %>%
     ggplot(mapping = aes(x = year, y = mean_ben_cnt, color = type,
                          group = type)) +
     geom_line() +
@@ -41,9 +235,10 @@ bind_rows(year_wt, year_unwt) %>%
                   width = 0.2,
                   size = 0.5)
 
-# Beneficiary age
+# Beneficiary age, anbibiotics
 pd <- position_dodge(0.25)
-bind_rows(year_wt, year_unwt) %>%
+bind_rows(year_class_wt, year_class_unwt) %>%
+    filter(class == "Antibiotic") %>%
     ggplot(mapping = aes(x = year, y = mean_ben_age, color = type,
                          group = type)) +
     geom_line(position = pd) +
@@ -53,15 +248,17 @@ bind_rows(year_wt, year_unwt) %>%
                   width = 0.2,
                   size = 0.2)
 
-# Percent female
-bind_rows(year_wt, year_unwt) %>%
+# Percent female, antibiotics
+bind_rows(year_class_wt, year_class_unwt) %>%
+    filter(class == "Antibiotic") %>%
     ggplot(mapping = aes(x = year, y = mean_percent_fem, color = type,
                          group = type)) +
-    geom_line(position = pd)
+    geom_line()
 
-# Mean HCC
+# Mean HCC, anbibiotics
 pd <- position_dodge(0.25)
-bind_rows(year_wt, year_unwt) %>%
+bind_rows(year_class_wt, year_class_unwt) %>%
+    filter(class == "Antibiotic") %>%
     ggplot(mapping = aes(x = year, y = mean_hcc, color = type,
                          group = type)) +
     geom_line(position = pd) +
@@ -71,26 +268,28 @@ bind_rows(year_wt, year_unwt) %>%
                   width = 0.2,
                   size = 0.2)
 
-# Mean number of antibiotic claims
+# Mean number of claims, antibiotics
 pd <- position_dodge(0.25)
-bind_rows(year_wt, year_unwt) %>%
-    ggplot(mapping = aes(x = year, y = mean_ant_clms, color = type,
+bind_rows(year_class_wt, year_class_unwt) %>%
+    filter(class == "Antibiotic") %>%
+    ggplot(mapping = aes(x = year, y = mean_clms, color = type,
                          group = type)) +
     geom_line(position = pd) +
-    geom_errorbar(aes(ymin = mean_ant_clms - sd_ant_clms,
-                      ymax = mean_ant_clms + sd_ant_clms),
+    geom_errorbar(aes(ymin = mean_clms - sd_clms,
+                      ymax = mean_clms + sd_clms),
                   position = pd,
                   width = 0.2,
                   size = 0.2)
 
-# Mean antibiotic claims per 1K beneficiaries
+# Mean claims per 1K beneficiaries, anbitiotics
 pd <- position_dodge(0.25)
-bind_rows(year_wt, year_unwt) %>%
-    ggplot(mapping = aes(x = year, y = mean_ant_clms_1k, color = type,
+bind_rows(year_class_wt, year_class_unwt) %>%
+    filter(class == "Antibiotic") %>%
+    ggplot(mapping = aes(x = year, y = mean_clms_1k, color = type,
                          group = type)) +
     geom_line(position = pd) +
-    geom_errorbar(aes(ymin = mean_ant_clms_1k - sd_ant_clms_1k,
-                      ymax = mean_ant_clms_1k + sd_ant_clms_1k),
+    geom_errorbar(aes(ymin = mean_clms_1k - sd_clms_1k,
+                      ymax = mean_clms_1k + sd_clms_1k),
                   position = pd,
                   width = 0.2,
                   size = 0.2)
@@ -101,11 +300,14 @@ bind_rows(year_wt, year_unwt) %>%
 
 ### Weighted beneficiary statistics by year
 
+- All stats computed with missing beneficiary counts imputed.
+
 ```{r tables, echo = FALSE, error = FALSE, message = FALSE}
 
 # Example slide 11 table
 # Turn this into a function to make this table. First col in table is the "by" variable--could be years, provider types, provider gender, etc.
-year_wt %>%
+year_class_wt %>%
+    filter(class == "Antibiotic") %>%
     arrange(desc(year)) %>%
     mutate(
         mean_ben_cnt = paste0(
@@ -146,34 +348,35 @@ year_wt %>%
 
 ### Weighted antibiotic use statistics by year
 
-Note: In this table and all of the tables below, claims quantities are coming from the by-provider data. For consistency, should recompute using claims from by-provider-and-drug.
+- All stats computed with missing beneficiary counts imputed.
 
 ```{r, echo = FALSE, error = FALSE, message = FALSE}
 # Example slide 12
-year_wt %>%
+year_class_wt %>%
+    filter(class == "Antibiotic") %>%
     arrange(desc(year)) %>%
     mutate(
-        mean_ant_clms = paste0(
-            format(mean_ant_clms, nsmall = 2, digits = 2, big.mark = ","),
+        mean_clms = paste0(
+            format(mean_clms, nsmall = 2, digits = 2, big.mark = ","),
             " (",
-            format(sd_ant_clms, nsmall = 2, digits = 2, big.mark = ","),
+            format(sd_clms, nsmall = 2, digits = 2, big.mark = ","),
             ")"),
         mean_ben_cnt = paste0(
             format(mean_ben_cnt, nsmall = 2, digits = 2, big.mark = ","),
             " (",
             format(sd_ben_cnt, nsmall = 2, digits = 2, big.mark = ","),
             ")"),
-        mean_ant_clms_1k = paste0(
-            format(mean_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+        mean_clms_1k = paste0(
+            format(mean_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
             " (",
-            format(sd_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+            format(sd_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
             ")"),
-        range_ant_clms_1k = paste0(
-            format(min_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+        range_clms_1k = paste0(
+            format(min_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
             "-",
-            format(max_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","))
+            format(max_clms_1k, nsmall = 2, digits = 2, big.mark = ","))
     ) %>%
-    select(year, mean_ant_clms, mean_ben_cnt, mean_ant_clms_1k, range_ant_clms_1k) %>%
+    select(year, mean_clms, mean_ben_cnt, mean_clms_1k, range_clms_1k) %>%
     datatable(
         options = list(dom = "t"),
         rownames = FALSE,
@@ -186,23 +389,16 @@ year_wt %>%
 
 ### Weighted 2019 beneficiary statistics by prescriber type
 
+- All stats computed with missing beneficiary counts imputed.
+
 ```{r, echo = FALSE, error = FALSE, message = FALSE}
 
-# Bank of prescriber types
-types <- read_feather("Idaho 2019 provider type bank.feather")
-
-# Compute weighted values by Karl's Standard_Provider_Type
-prscrbr_type_2019 <- summarize_provider_data(
-    providers_data = p %>%
-        filter(year == 2019) %>%
-        left_join(types, by = "Prscrbr_Type"),
-    grouping_var = "Standard_Provider_Type",
-    type = "weighted") %>%
-    mutate(Prscrbr_Type = Standard_Provider_Type) %>%
-    arrange(desc(n_providers))
-
 # Table describing beneficiaries by prescriber type
-prscrbr_type_2019 %>% 
+summarize_provider_data(
+    providers_data = pd_claims_1k,
+    grouping_var = "Std_Provider_Type",
+    type = "weighted") %>%
+    filter(class == "Antibiotic", year == 2019) %>%
     arrange(desc(mean_ben_cnt)) %>%
     mutate(
         mean_ben_cnt = paste0(
@@ -229,10 +425,10 @@ prscrbr_type_2019 %>%
             format(min_hcc, nsmall = 2, digits = 2, big.mark = ","),
             "-",
             format(max_hcc, nsmall = 2, digits = 2, big.mark = ","))) %>%
-    select(Prscrbr_Type, mean_ben_cnt, ben_cnt_range, mean_ben_age, mean_percent_fem, mean_hcc,
+    select(Std_Provider_Type, mean_ben_cnt, ben_cnt_range, mean_ben_age, mean_percent_fem, mean_hcc,
            hcc_range) %>%
     datatable(
-        # options = list(dom = "t"),
+        options = list(dom = "t"),
         rownames = FALSE,
               colnames = c("Prescriber Type", "Mean (SD) Beneficiary Count", "Range Beneficiary Count", "Mean (SD) Beneficiary Age", "Sex (% Female)", "Mean (SD) Beneficiary HCC Score", "Range Beneficiary HCC Score"))
 
@@ -243,63 +439,42 @@ prscrbr_type_2019 %>%
 
 ### Weighted 2019 antibiotic use statistics by prescriber type
 
+- All stats computed with missing beneficiary counts imputed.
+
 ```{r, echo = FALSE, error = FALSE, message = FALSE}
 
 # Table describing antibiotic prescribing by provider type
-prscrbr_type_2019 %>% 
-    arrange(desc(mean_ant_clms_1k)) %>%
+summarize_provider_data(
+    providers_data = pd_claims_1k,
+    grouping_var = "Std_Provider_Type",
+    type = "weighted") %>%
+    filter(class == "Antibiotic", year == 2019) %>%
+    arrange(desc(mean_clms_1k)) %>%
     mutate(
-        mean_ant_clms = paste0(
-            format(mean_ant_clms, nsmall = 2, digits = 2, big.mark = ","),
+        mean_clms = paste0(
+            format(mean_clms, nsmall = 2, digits = 2, big.mark = ","),
             " (",
-            format(sd_ant_clms, nsmall = 2, digits = 2, big.mark = ","),
+            format(sd_clms, nsmall = 2, digits = 2, big.mark = ","),
             ")"),
         mean_ben_cnt = paste0(
             format(mean_ben_cnt, nsmall = 2, digits = 2, big.mark = ","),
             " (",
             format(sd_ben_cnt, nsmall = 2, digits = 2, big.mark = ","),
             ")"),
-        mean_ant_clms_1k = paste0(
-            format(mean_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+        mean_clms_1k = paste0(
+            format(mean_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
             " (",
-            format(sd_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+            format(sd_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
             ")"),
-        range_ant_clms_1k = paste0(
-            format(min_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
+        range_clms_1k = paste0(
+            format(min_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
             "-",
-            format(max_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","))
+            format(max_clms_1k, nsmall = 2, digits = 2, big.mark = ","))
     ) %>%
-    select(Prscrbr_Type, mean_ant_clms, mean_ben_cnt, mean_ant_clms_1k, range_ant_clms_1k) %>%
+    select(Std_Provider_Type, mean_clms, mean_ben_cnt, mean_clms_1k, range_clms_1k) %>%
     datatable(
-        # options = list(dom = "t"),
+        options = list(dom = "t"),
         rownames = FALSE,
               colnames = c("Prescriber Type", "Mean (SD) Antibiotic Claims", "Mean (SD) Beneficiary Count", "Mean Antibiotic Claims / 1K Beneficiaries", "Range Antibiotic Claims / 1K Beneficiaries"))
 
 ```
-
-
-
-
-```{r, echo = FALSE, error = FALSE, message = FALSE}
-
-# <br>
-# <br>
-
-### Same table as above, produced by kable()
-
-# prscrbr_type_2019 %>%
-#     arrange(desc(mean_ant_clms_1k)) %>%
-#     mutate(
-#         range_ant_clms_1k = paste0(
-#             format(min_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","),
-#             "-",
-#             format(max_ant_clms_1k, nsmall = 2, digits = 2, big.mark = ","))
-#     ) %>%
-#     select(Prscrbr_Type, mean_ant_clms, mean_ben_cnt, mean_ant_clms_1k, range_ant_clms_1k) %>%
-#     kable(digits = 2,
-#           row.names = FALSE,
-#           col.names = c("Prescriber Type", "Mean (SD) Antibiotic Claims", "Mean (SD) Beneficiary Count", "Mean Antibiotic Claims / 1K Beneficiaries", "Range Antibiotic Claims / 1K Beneficiaries"),
-#           align = "l")
-
-```
-
