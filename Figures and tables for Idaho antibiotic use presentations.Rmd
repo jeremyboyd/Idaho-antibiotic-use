@@ -16,6 +16,9 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
+# TODO: better way to do this is to come up with a pd dataset that's 1 row per prescriber per drug class per year. That dataset has lots of columns, including Tot_Benes, Tot_Benes_Imp, claims_1k, claims_1k imp. Then have a general summary function that takes this dataset and a group_by specification. It will output summaries for lots of different values that are both weighted and unweighted. If weighted, should be versions using Tot_Benes (which means all rows with fewer than 11 will be omitted), and Tot_Benes_Imp (which means that we get to keep those rows). For each different type of summary we want a col that describes the summary type--e.g., no imputation, weighted; yes imputation, unweighted, etc.
+
+
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #### Compute claims / 1K beneficiaries ####
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -152,7 +155,7 @@ change <- pd_claims_1k_sum %>%
 - Computation of means and linear models use beneficiary counts as weights.
 - Models are of log(claims_1k).
 
-```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.height = 8, fig.width = 9}
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.height = 8, fig.width = 11}
 
 # Plot claims_1k ~ year, with annotations showing percent decrease and p-values
 # for statsig decreases.
@@ -186,7 +189,7 @@ pd_claims_1k_sum %>%
                                     max(pd_claims_1k_sum$year), 2)) +
     scale_y_continuous(breaks = seq(0, 1000, 100),
                        limits = c(0, 400)) +
-    facet_wrap(~ class2, ncol = 4) +
+    facet_wrap(~ class2, ncol = 4, scales = "free") +
     labs(x = "Year",
          y = "Claims\nper 1K\nbeneficiaries",
          color = "Class") +
