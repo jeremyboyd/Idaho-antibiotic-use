@@ -1,0 +1,375 @@
+---
+title: "Idaho antibiotic use"
+author: "Jeremy Boyd"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Distribution of claims per 1K beneficiary
+
+- Second and fourth figures are claims_1k where missing beneficiary counts have been imputed.
+- Last two figures show that normality improves when claims_1k is logged.
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### Create base table for models and summaries ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+# Tot_Clms: The number of Medicare Part D claims. This includes original
+# prescriptions and refills. Get this from by-provider-and-drug.
+# Tot_Benes: The total number of unique Medicare Part D beneficiaries with at
+# least one claim for the drug. Get this from by-provider. Definition "the drug"
+# is a bit misleading, since in the by-provider dataset we're getting a count of
+# beneficiaries who had a prescription for *any* drug.
+
+# Read in generic drug bank
+generics <- read_feather("Generic drug bank.feather")
+
+# Read in 2019 provider types
+p_types <- read_feather("Idaho 2019 provider type bank.feather")
+
+# Read in by-provider-and-drug dataset. This has claims numbers for computing
+# claims per 1K beneficiaries.
+pd <- read_feather("Idaho prescribers by provider & drug data.feather") %>%
+    
+    # Join in coding for drug classes from generics
+    left_join(generics, by = "Gnrc_Name") %>%
+    select(Prscrbr_NPI, year, Gnrc_Name, Tot_Clms, Antibiotic:Other)
+    
+# Read in by-provider dataset. This has beneficiary numbers for computing claims
+# per 1K beneficiaries. Join in prescriber type (only have this for 2019 so
+# far).
+p <- read_feather("Idaho prescribers by provider data.feather") %>%
+    select(Prscrbr_NPI, year, Tot_Benes, Prscrbr_RUCA, Prscrbr_Type,
+           Bene_Avg_Age, Bene_Feml_Cnt, Bene_Avg_Risk_Scre) %>%
+    mutate(Tot_Benes_Imp = Tot_Benes) %>%
+    left_join(p_types, by = c("Prscrbr_Type", "year"))
+
+# Separate into tables based on whether Tot_Benes is defined or not
+yes_benes <- p %>% filter(!is.na(Tot_Benes))
+no_benes <- p %>% filter(is.na(Tot_Benes))
+
+# For NA values, impute
+# NOTE: Can we also impute values for other cols? Most of these are subject to
+# the > 10 beneficiary rule.
+set.seed(1)
+no_benes$Tot_Benes_Imp <- round(rnorm(n = nrow(no_benes), mean = 5.5, sd = 1.5))
+no_benes <- no_benes %>%
+    mutate(Tot_Benes_Imp = case_when(
+        Tot_Benes_Imp > 10 ~ 10,
+        Tot_Benes_Imp < 1 ~ 1,
+        TRUE ~ Tot_Benes_Imp))
+
+# Recombine to form p_benes with imputed values for NA Tot_Benes
+p <- bind_rows(yes_benes, no_benes) %>%
+    mutate(percent_fem = Bene_Feml_Cnt / Tot_Benes * 100,
+           percent_fem_imp = Bene_Feml_Cnt / Tot_Benes_Imp * 100)
+
+# Drug classes that we want to compute claims per 1K beneficiaries for
+drug_classes <- names(generics)[2:length(names(generics))]
+
+# Summarize across drugs to get total claims per drug *class*. Join in
+# beneficiary data.
+p2 <- map_dfr(drug_classes, function(class) {
+    message(paste0("Getting claim & beneficiary data for class ", class, "..."))
+    claims_year(data = pd, drug_class = class) %>%
+        right_join(p, by = c("Prscrbr_NPI", "year")) %>%
+        mutate(class = class) }) %>%
+    mutate(tot_clms = if_else(is.na(tot_clms), 0, tot_clms),
+           claims_1k = tot_clms / (Tot_Benes / 1000),
+           claims_1k_imp = tot_clms / (Tot_Benes_Imp / 1000),
+           
+           # NOTE: We now have lots of zeros, and log(0) is undefined. Model as
+           # proportion data (negative binomial?) since that's actually what it is.
+           log_claims_1k = log(claims_1k),
+           log_claims_1k_imp = log(claims_1k_imp))
+
+# p2 has one row per provider per year per drug class
+p2 %>% count(class, year)
+p2 %>% count(year, class)
+
+# Example prescriber: for 2013 we have rows for each drug class. Tot_Benes is always the same because it doesn't change over a year. tot_clms is per drug class.
+(p2 %>%
+    filter(Prscrbr_NPI == "1003012204") %>%
+    select(Prscrbr_NPI, year, class, tot_clms, Tot_Benes) %>%
+    arrange(year, class))[1:11,]
+
+# Same story for 2014
+(p2 %>%
+    filter(Prscrbr_NPI == "1003012204") %>%
+    select(Prscrbr_NPI, year, class, tot_clms, Tot_Benes) %>%
+    arrange(year, class))[12:22,]
+
+# Same story for 2019
+(p2 %>%
+    filter(Prscrbr_NPI == "1003012204") %>%
+    select(Prscrbr_NPI, year, class, tot_clms, Tot_Benes) %>%
+    arrange(year, class))[67:77,]
+
+# Modeling notes:
+# We're actually modeling proportions: number of claims out of number of beneficiaries. So some type of GLM: poisson, negative binomial...
+    
+
+# Table showing the number of providers, anbitiotic claims, and beneficiaries per year. Checked manually versus the p and pd tables and found that n_providers, n_claims, and n_bene are all correct.
+
+
+
+
+# Summary of beneficiaries
+# ben_sum <- p2 %>%
+#     filter(class == "Antibiotic") %>%
+#     group_by(year) %>%
+#     summarize(
+#         n_prv = sum(!is.na(Prscrbr_NPI)),
+#         n_cl = sum(tot_clms, na.rm = TRUE),
+#         n_ben = sum(Tot_Benes, na.rm = TRUE),
+#         n_ben_imp = sum(Tot_Benes_Imp, na.rm = TRUE), .groups = "drop") %>%
+#     
+# 
+#     # Weighted by Tot_Benes
+#     left_join(
+#     p2 %>%
+#         filter(class == "Antibiotic", !is.na(Tot_Benes)) %>%
+#         group_by(year) %>%
+#         summarize(        
+#             mn_age_wt = weighted.mean(
+#                 Bene_Avg_Age, Tot_Benes, na.rm = TRUE),
+#             mn_hcc_wt = weighted.mean(
+#                 Bene_Avg_Risk_Scre, Tot_Benes, na.rm = TRUE),
+#             mn_fem_wt = weighted.mean(
+#                 percent_fem, Tot_Benes, na.rm = TRUE),
+#             mn_cl_wt = weighted.mean(
+#                 tot_clms, Tot_Benes, na.rm = TRUE),
+#             mn_ben_wt = weighted.mean(
+#                 Tot_Benes, na.rm = TRUE),
+#             mn_cl_1k_wt = weighted.mean(
+#                 claims_1k, Tot_Benes, na.rm = TRUE),
+#             .groups = "drop"), by = "year") %>%
+# 
+#     # Weighted by Tot_Benes_Imp, or unweighted
+#     left_join(
+#     p2 %>%
+#         filter(class == "Antibiotic") %>%
+#         group_by(year) %>%
+#         summarize(        
+#             mn_age_wt_imp = weighted.mean(
+#                 Bene_Avg_Age, Tot_Benes_Imp, na.rm = TRUE),
+#             mn_age_unwt = mean(
+#                 Bene_Avg_Age, na.rm = TRUE),
+#             mn_hcc_wt_imp = weighted.mean(
+#                 Bene_Avg_Risk_Scre, Tot_Benes_Imp, na.rm = TRUE),
+#             mn_hcc_unwt = mean(
+#                 Bene_Avg_Risk_Scre, na.rm = TRUE),
+#             mn_fem_wt_imp = weighted.mean(
+#                 percent_fem_imp, Tot_Benes_Imp, na.rm = TRUE),
+#             mn_fem_unwt = mean(
+#                 percent_fem, na.rm = TRUE),
+#             mn_cl_wt_imp = weighted.mean(
+#                 tot_clms, Tot_Benes_Imp, na.rm = TRUE),
+#             mn_cl_unwt = mean(
+#                 tot_clms, na.rm = TRUE),
+#             mn_ben_wt_imp = weighted.mean(
+#                 Tot_Benes_Imp, na.rm = TRUE),
+#             mn_ben_unwt = mean(
+#                 Tot_Benes, na.rm = TRUE),
+#             mn_cl_1k_wt_imp = weighted.mean(
+#                 claims_1k_imp, Tot_Benes_Imp, na.rm = TRUE),
+#             mn_cl_1k_unwt = mean(
+#                 claims_1k, na.rm = TRUE),
+#             .groups = "drop"), by = "year")
+# 
+# # Differences between the _wt and _wt_imp values are subtle. Means that, at
+# # least for age, hcc, fem, it doesn't matter whether we impute or not--must be
+# # very few rows of Tot_Benes that are NA.
+# ben_sum[1,]$mn_age_wt
+# ben_sum[1,]$mn_age_wt_imp
+# ben_sum[1,]$mn_hcc_wt
+# ben_sum[1,]$mn_hcc_wt_imp
+# 
+# # Mean number of beneficiaries is lower when we impute--makes sense because all of the NA beneficiary counts are < 11.
+# ben_sum %>% select(matches("mn_ben"))
+# 
+# # Mean number of claims is similar whether we impute or not. Very much lower when unweighted though.
+# ben_sum %>% select(year, matches("mn_cl_(wt|wt_imp|unwt)"))
+# 
+# # Mean claims 1k is similar whether we impute or not, but significantly lower when unweighted.
+# ben_sum %>% select(year, matches("cl_1k"))
+# 
+# # FOR ALL OF THE VALUES THAT WE REPORT IN TABLES IT LOOKS LIKE THE REAL DIFFERENCE IS BEWEEN WEIGHTED AND UNWEIGHTED MEANS. DOESN'T SEEM TO MATTER MUCH WHETHER WE IMPUTE MISSING VALUES OF TOT_BENES.
+# 
+# # Shows that there's not much of a difference between the number of beneficiaries with and without imputation. Imputation is adding < 1% to the number of beneficiaries we have without imputation. So maybe don't worry about imputation and instead focus on weighting versus not.!!!!!!!!!!
+# ben_sum %>%
+#     mutate(diff = n_ben_imp - n_ben,
+#            p_miss_ben = diff / n_ben) %>%
+#     select(year, n_ben, n_ben_imp, diff, p_miss_ben)
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### Summary tables ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+# Beneficiary table by year
+p2 %>%
+    filter(class == "Antibiotic") %>%
+    rename(Year = year) %>%
+    compute_summary_table(group = "Year") %>%
+    format_ben_table()
+
+# Beneficiary data stays the same, regardless of the class of antibiotics chosen
+p2 %>%
+    filter(class == "Cephalosporin") %>%
+    rename(Year = year) %>%
+    compute_summary_table(group = "Year") %>%
+    format_ben_table()
+
+# 2019 beneficiary table by provider type
+p2 %>%
+    filter(class == "Antibiotic", year == 2019) %>%
+    rename(`Provider Type` = Std_Provider_Type) %>%
+    compute_summary_table(group = "Provider Type") %>%
+    format_ben_table()
+
+# Again, beneficiary data stays the same, regardless of drug class
+p2 %>%
+    filter(class == "Cephalosporin", year == 2019) %>%
+    rename(`Provider Type` = Std_Provider_Type) %>%
+    compute_summary_table(group = "Provider Type") %>%
+    format_ben_table()
+
+# Use table by year
+p2 %>%
+    filter(class == "Antibiotic") %>%
+    rename(Year = year) %>%
+    compute_summary_table(group = "Year") %>%
+    format_use_table()
+
+# Mean beneficiary count stays the same by year, but other cols change with a
+# different drug.
+p2 %>%
+    filter(class == "Cephalosporin") %>%
+    rename(Year = year) %>%
+    compute_summary_table(group = "Year") %>%
+    format_use_table()
+
+# 2019 use table by provider type
+p2 %>%
+    filter(class == "Antibiotic", year == 2019) %>%
+    rename(`Provider Type` = Std_Provider_Type) %>%
+    compute_summary_table(group = "Provider Type") %>%
+    format_use_table()
+
+```
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# ADD IN FIGURES COMPARING WEIGHTED & UNWEIGHTED
+
+# Number of providers per year
+p2 %>%
+    filter(class == "Antibiotic") %>%
+    compute_summary_table(group = "year") %>%
+    ggplot(mapping = aes(x = year, y = n_prv)) +
+    geom_line()
+               
+# Mean beneficiaries by year
+p2 %>%
+    filter(class == "Antibiotic") %>%
+    compute_summary_table(group = "year") %>%
+    ggplot(mapping = aes(x = year, y = mn_ben)) +
+    geom_line() +
+    geom_errorbar(aes(ymin = mn_ben - sd_ben,
+                      ymax = mn_ben + sd_ben),
+                  width = 0.2,
+                  size = 0.5)
+
+# Mean beneficiary age per year
+p2 %>%
+    filter(class == "Antibiotic") %>%
+    compute_summary_table(group = "year") %>%
+    select(year, mn_age_wt, mn_age_unwt) %>%
+    pivot_longer(cols = matches("mn_age"), names_to = "type",
+                 values_to = "mean") %>%
+    ggplot(mapping = aes(x = year, y = mean, color = type, group = type)) +
+    geom_line()
+
+# Mean % female per year
+p2 %>%
+    filter(class == "Antibiotic") %>%
+    compute_summary_table(group = "year") %>%
+    select(year, mn_fem_wt, mn_fem_unwt) %>%
+    pivot_longer(cols = matches("mn_fem"), names_to = "type",
+                 values_to = "mean") %>%
+    ggplot(mapping = aes(x = year, y = mean, color = type, group = type)) +
+    geom_line()
+
+# Mean hcc per year
+p2 %>%
+    filter(class == "Antibiotic") %>%
+    compute_summary_table(group = "year") %>%
+    select(year, mn_hcc_wt, mn_hcc_unwt) %>%
+    pivot_longer(cols = matches("mn_hcc"), names_to = "type",
+                 values_to = "mean") %>%
+    ggplot(mapping = aes(x = year, y = mean, color = type, group = type)) +
+    geom_line()
+
+# Mean claims per year
+p2 %>%
+    filter(class == "Antibiotic") %>%
+    compute_summary_table(group = "year") %>%
+    select(year, mn_cl_wt, mn_cl_unwt) %>%
+    pivot_longer(cols = matches("mn_cl"), names_to = "type",
+                 values_to = "mean") %>%
+    ggplot(mapping = aes(x = year, y = mean, color = type, group = type)) +
+    geom_line()
+
+# Mean claims per 1k beneficiaries per year
+p2 %>%
+    filter(class == "Antibiotic") %>%
+    compute_summary_table(group = "year") %>%
+    select(year, mn_cl_1k_wt, mn_cl_1k_unwt) %>%
+    pivot_longer(cols = matches("mn_cl"), names_to = "type",
+                 values_to = "mean") %>%
+    ggplot(mapping = aes(x = year, y = mean, color = type, group = type)) +
+    geom_line()
+
+```
+
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Weighted claims per 1k beneficiaries by year, where we're including providers
+# who don't have any associated antibiotic claims, rather than only including
+# those with >= 1 associated anbitiotic claim.
+map_dfr(drug_classes, function(x) {
+    p2 %>%
+        filter(class == x) %>%
+        compute_summary_table(group = "year") %>%
+        select(year, mn_cl_1k_wt) %>%
+        mutate(class = x) %>%
+        ungroup()
+}) %>%
+    mutate(class = fct_relevel(class, "Other", after = Inf)) %>%
+    ggplot(mapping = aes(x = year, y = mn_cl_1k_wt, color = class, group = class)) +
+    geom_line() +
+    scale_y_continuous(limits = c(0, 300)) +
+    facet_wrap(~ class, ncol = 4, scales = "free") +
+    labs(x = "Year",
+         y = "Claims\nper 1K\nbeneficiaries",
+         color = "Class") +
+    theme(legend.position = "none")
+    
+
+
+
+
+# DO MODELS OF claims_1k ~ year
+
+
+
+
+```
+
