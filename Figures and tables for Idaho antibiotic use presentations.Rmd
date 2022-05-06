@@ -88,6 +88,91 @@ pd_claims_1k <- map_dfr(drug_classes, function(class) {
                class = class)
 }) 
 
+```
+
+### Provider types and missing beneficiary counts
+
+```{r, echo = FALSE, error = FALSE, message = FALSE}
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### Which subsets are missing beneficiary counts ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+# p_benes says that there are 6,198 providers in Idaho 2019. 457 of these have NA Tot_Benes. This is a table of providers who had a prescription claim for *any* drug.
+p_benes %>%
+    filter(year == 2019) %>%
+    summarize(
+        providers_bene = sum(!is.na(Tot_Benes)),
+        providers_nobene = sum(is.na(Tot_Benes)),
+        providers_all = n(),
+        .groups = "drop") %>%
+    arrange(desc(providers_nobene))
+    
+# In contrast, this table is smaller. Of the 6,198 total providers, this is the number who had a claim for an antibiotic--just 2,634.
+pd_claims_1k %>%
+    filter(year == 2019, class == "Antibiotic")
+
+# When you look at just Idaho 2019 providers who had an antibiotic claim, you see that the number of providers with NA Tot_Benes is now just 6.
+pd_claims_1k %>%
+    filter(year == 2019, class == "Antibiotic") %>%
+    group_by(year, class) %>%
+    summarize(
+        providers_bene = sum(!is.na(Tot_Benes)),
+        providers_nobene = sum(is.na(Tot_Benes)),
+        providers_all = n(),
+        .groups = "drop") %>%
+    arrange(desc(providers_nobene))
+
+# Should be smaller for the other classes, since they're subtypes of antibiotics. Yes, this is the case. In fact, when you add up the sub-types (2 NA for PCN, 1 for cephalosporin, 1 for Fluoroguinolone, 1, for tetracycline, 1 for TMP/SMX) you get 6.
+pd_claims_1k %>%
+    filter(year == 2019) %>%
+    group_by(year, class) %>%
+    summarize(
+        providers_bene = sum(!is.na(Tot_Benes)),
+        providers_nobene = sum(is.na(Tot_Benes)),
+        providers_all = n(),
+        .groups = "drop") %>%
+    arrange(desc(providers_nobene))
+
+# How many antibiotic prescribers have missing Tot_Benes across years? Less than 1% per year. So while it's true that you're missing providers with < 11 beneficiaries, turns out there are very few of these when talking about antibiotic prescriptions.
+pd_claims_1k %>%
+    filter(class == "Antibiotic") %>%
+    group_by(year, class) %>%
+    summarize(
+        providers_bene = sum(!is.na(Tot_Benes)),
+        providers_nobene = sum(is.na(Tot_Benes)),
+        providers_all = n(),
+        .groups = "drop") %>%
+    arrange(desc(providers_nobene)) %>%
+    mutate(percent_missing = providers_nobene / providers_all * 100)
+
+# This confirms that we have the same number of beneficiaries for a provider across different drug classes. Showing a random sample of providers from 2019 here.
+providers <- pd_claims_1k %>%
+    filter(year == 2019, class == "Antibiotic") %>%
+    select(Prscrbr_NPI) %>%
+    unique() %>%
+    sample_n(10) %>%
+    pull(Prscrbr_NPI)
+y <- pd_claims_1k %>%
+    filter(year == 2019,
+           Prscrbr_NPI %in% providers) %>%
+    select(Prscrbr_NPI, class, tot_clms, Tot_Benes) %>%
+    arrange(Prscrbr_NPI)
+map(providers, function(provider) {
+    y %>%
+        filter(Prscrbr_NPI == !!provider)
+})
+
+# MEANS THAT WE'RE PROBABLY NOT getting a ton of biasing based on NA Tot_Benes because there's < 1% missing for all of the computations we're doing. This is related to the weighting issue because we can only do weighting when we have Tot_Benes. But we're really only losing a very small number of providers when we do a weighted calculation, so probably not going to affect things too much.
+
+# Think I need to redo the n_providers figure to show this. Right now it's not showing any difference because I'm using Tot_Benes_Imp, so both the weighted and unweighted calculations will have the same number of providers because there won't be any NAs in Tot_Benes.
+
+
+
+
+
+
+
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #### Model claims / 1K beneficiaries ####
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
