@@ -544,3 +544,289 @@ summarize_provider_data <- function(providers_data,
         message("Something went wrong on type logic.")
     }
 }
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### compute_summary_table() ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+compute_summary_table <- function(data, group) {
+    
+    # Add grouping
+    data <- data %>%
+        group_by(!!sym(group), class)
+    
+    # Basic stats
+    sum <- data %>%
+        summarize(
+            n_prv = sum(!is.na(Prscrbr_NPI)),
+            n_cl = sum(tot_clms, na.rm = TRUE),
+            n_ben = sum(Tot_Benes, na.rm = TRUE),
+            n_ben_imp = sum(Tot_Benes_Imp, na.rm = TRUE),
+            mn_ben = mean(Tot_Benes, na.rm = TRUE),
+            sd_ben = sd(Tot_Benes, na.rm = TRUE),
+            min_ben = min(Tot_Benes, na.rm = TRUE),
+            max_ben = max(Tot_Benes, na.rm = TRUE),
+            .groups = "keep") %>%
+        
+        # Weighted by Tot_Benes
+        left_join(
+            data %>%
+                filter(!is.na(Tot_Benes)) %>%
+                summarize(
+                    mn_age_wt = weighted.mean(Bene_Avg_Age, Tot_Benes,
+                                              na.rm = TRUE),
+                    sd_age_wt = weighted.sd(Bene_Avg_Age, Tot_Benes,
+                                            na.rm = TRUE),
+                    mn_hcc_wt = weighted.mean(Bene_Avg_Risk_Scre, Tot_Benes,
+                                              na.rm = TRUE),
+                    sd_hcc_wt = weighted.sd(Bene_Avg_Risk_Scre, Tot_Benes,
+                                            na.rm = TRUE),
+                    min_hcc = min(Bene_Avg_Risk_Scre, na.rm = TRUE),
+                    max_hcc = max(Bene_Avg_Risk_Scre, na.rm = TRUE),
+                    mn_fem_wt = weighted.mean(percent_fem, Tot_Benes,
+                                              na.rm = TRUE),
+                    mn_cl_wt = weighted.mean(tot_clms, Tot_Benes, na.rm = TRUE),
+                    sd_cl_wt = weighted.sd(tot_clms, Tot_Benes, na.rm = TRUE),
+                    mn_cl_1k_wt = weighted.mean(claims_1k, Tot_Benes,
+                                                na.rm = TRUE),
+                    sd_cl_1k_wt = weighted.sd(claims_1k, Tot_Benes,
+                                              na.rm = TRUE),
+                    min_cl_1k = min(claims_1k, na.rm = TRUE),
+                    max_cl_1k = max(claims_1k, na.rm = TRUE),
+                    .groups = "keep"),
+            by = group) %>%
+        
+        # Unweighted
+        left_join(
+            data %>%
+                summarize(
+                    mn_age_unwt = mean(Bene_Avg_Age, na.rm = TRUE),
+                    mn_hcc_unwt = mean(Bene_Avg_Risk_Scre, na.rm = TRUE),
+                    mn_fem_unwt = mean(percent_fem, na.rm = TRUE),
+                    mn_cl_unwt = mean(tot_clms, na.rm = TRUE),
+                    mn_ben_unwt = mean(Tot_Benes, na.rm = TRUE),
+                    mn_cl_1k_unwt = mean(claims_1k, na.rm = TRUE),
+                    .groups = "keep"),
+            by = group)
+    return(sum %>% group_by(!!sym(group)))
+}
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### format_ben_table()  ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+format_ben_table <- function(data) {
+    
+    # Extract grouping
+    group <- data %>% group_keys() %>% names()
+    
+    if(group == "Year") { data <- data %>% arrange(desc(Year)) }
+    if(group == "Provider Type") { data <- data %>% arrange(desc(mn_ben)) }
+    
+    # Format beneficiary table
+    data %>%
+        mutate(
+            mn_ben = paste0(
+                format(
+                    mn_ben,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                " (",
+                format(
+                    sd_ben,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                ")"
+            ),
+            ben_range = paste0(
+                format(
+                    min_ben,
+                    nsmall = 0,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                "-",
+                format(
+                    max_ben,
+                    nsmall = 0,
+                    digits = 2,
+                    big.mark = ","
+                )
+            ),
+            mn_age_wt = paste0(
+                format(
+                    mn_age_wt,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                " (",
+                format(
+                    sd_age_wt,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                ")"
+            ),
+            mn_fem_wt = format(mn_fem_wt, nsmall = 1, digits = 2),
+            mn_hcc_wt = paste0(
+                format(
+                    mn_hcc_wt,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                " (",
+                format(
+                    sd_hcc_wt,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                ")"
+            ),
+            hcc_range = paste0(
+                format(
+                    min_hcc,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                "-",
+                format(
+                    max_hcc,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                )
+            )
+        ) %>%
+        select(!!sym(group),
+               class,
+               mn_ben,
+               ben_range,
+               mn_age_wt,
+               mn_fem_wt,
+               mn_hcc_wt,
+               hcc_range) %>%
+        datatable(
+            options = list(dom = "t"),
+            rownames = FALSE,
+            colnames = c(
+                group,
+                "Class",
+                "Mean (SD) Beneficiary Count",
+                "Range Beneficiary Count",
+                "Mean (SD) Beneficiary Age",
+                "Sex (% Female)",
+                "Mean (SD) Beneficiary HCC Score",
+                "Range Beneficiary HCC Score"
+            )
+        ) %>%
+        return()
+}
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### format_use_table()  ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+format_use_table <- function(data) {
+    
+    # Extract grouping
+    group <- data %>% group_keys() %>% names()
+    
+    if(group == "Year") { data <- data %>% arrange(desc(Year)) }
+    if(group == "Provider Type") { data <- data %>% arrange(desc(mn_cl_1k_wt)) }
+    
+    # Format beneficiary table
+    data %>%
+        mutate(
+            mn_cl = paste0(
+                format(
+                    mn_cl_wt,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                " (",
+                format(
+                    sd_cl_wt,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                ")"
+            ),
+            mn_ben = paste0(
+                format(
+                    mn_ben,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                " (",
+                format(
+                    sd_ben,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                ")"
+            ),
+            mn_cl_1k = paste0(
+                format(
+                    mn_cl_1k_wt,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                " (",
+                format(
+                    sd_cl_1k_wt,
+                    nsmall = 2,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                ")"
+            ),
+            cl_1k_range = paste0(
+                format(
+                    min_cl_1k,
+                    nsmall = 0,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                "-",
+                format(
+                    max_cl_1k,
+                    nsmall = 0,
+                    digits = 2,
+                    big.mark = ","
+                )
+            )) %>%
+        select(!!sym(group),
+               class,
+               mn_cl,
+               mn_ben,
+               mn_cl_1k,
+               cl_1k_range) %>%
+        datatable(
+            options = list(dom = "t"),
+            rownames = FALSE,
+            colnames = c(
+                group,
+                "Class",
+                "Mean (SD) Claims",
+                "Mean (SD) Beneficiary Count",
+                "Mean (SD) Claims / 1K Beneficiaries",
+                "Range Claims / 1K Beneficiaries"
+            )
+        ) %>%
+        return()
+}
+
