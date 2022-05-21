@@ -1625,6 +1625,57 @@ general_n <- p2019.2 %>%
 
 ```
 
+
+```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Only general medicine providers from 2019
+p2019.3 <- p2019.2 %>%
+    filter(Std_Provider_Type == "General Medicine")
+
+# Check missingness
+p2019.3 %>%
+    summarize_all(~ sum(is.na(.) | is.infinite(.)) / n()) %>%
+    mutate(across(where(is.double), ~ format(., digits = 2, nsmall = 2))) %>%
+    datatable()
+
+# Model
+qp_gm1 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        primary_RUCA +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        percent_fem +
+                        percent_white,
+             data = p2019.3,
+             family = quasipoisson)
+
+# Save model fitted & residuals
+p2019.3$pred_qp_gm1 <- fitted(qp_gm1)
+p2019.3$resid_qp_gm1 <- residuals.glm(qp_gm1, type = "pearson")
+
+
+p2019.3 %>%
+    select(fitted = pred_qp_gm1, residual = resid_qp_gm1) %>%
+    ggplot(aes(x = fitted, y = residual)) +
+    geom_point(alpha = 0.2) +
+    labs(title = "Distribution of residuals, quasipoisson, general medicine")
+
+
+
+p2019.3 %>%
+    ggplot(aes(x = Antbtc_Tot_Clms, y = pred_qp_gm1)) +
+    geom_point(alpha = 0.1) +
+    geom_abline(intercept = 0, slope = 1, color = "blue", size = 0.2) +
+    scale_x_continuous(limits = c(-50, 1000)) +
+    scale_y_continuous(limits = c(-50, 1000)) +
+    labs(title = "Observed versus predicted antibiotic claims from a quasipoisson model",
+         subtitle = paste(
+             "R-squared =",
+             round(cor(p2019.3$Antbtc_Tot_Clms, p2019.3$pred_qp_gm1)^2,
+                   digits = 2)))
+
+```
+
+
 ```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # Compute O/E ratios. Larger ratios mean we're underpredicting antibiotic counts. Smaller ratios mean we're overpredicting antibiotic counts. Karl's figure in PPT has zero as the midpoint rather than 1. More like log-odds.
