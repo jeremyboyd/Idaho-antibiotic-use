@@ -13,3 +13,4 @@ test_place_names_acc
 .DS_Store
 *.html
 compute_time.R
+*.rds

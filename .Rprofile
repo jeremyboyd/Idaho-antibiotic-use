@@ -12,9 +12,12 @@ library(knitr)              # For kable()
 library(brms)
 library(lmerTest)
 library(rstan)
+library(Hmisc)
 
-# Resolve conflict for filter
+# Resolve conflicts
 filter <- dplyr::filter
+select <- dplyr::select
+summarize <- dplyr::summarize
 
 # For fitting bayesian models
 options(mc.cores = parallel::detectCores())
@@ -22,6 +25,28 @@ rstan_options(auto_write = TRUE)
 
 # Google API key
 api_key <- Sys.getenv("GOOGLE_API_KEY")
+
+# Cache downloaded shapefiles
+options(tigris_use_cache = TRUE)
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#### CI for weighted mean ####
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+weighted.ci <- function(x, weights, type, conf.level = 0.95) {
+    require(Hmisc)
+    n <- length(x)
+    df <- n - 1
+    var <- wtd.var(x, weights, normwt = FALSE, na.rm = TRUE)
+    mean <- wtd.mean(x, weights, normwt = FALSE, na.rm = TRUE)
+    stderr <- sqrt(var / n)
+    tstat <- mean / stderr ## not mx - mu
+    alpha <- 1 - conf.level
+    cint <- qt(1 - alpha/2, df)
+    if(type == "lower") { cint <- tstat - cint}
+    else { cint <- tstat + cint }
+    cint * stderr
+}
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #### Custom ggplot2 theme ####
@@ -550,65 +575,71 @@ summarize_provider_data <- function(providers_data,
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 compute_summary_table <- function(data, group) {
-    
-    # Add grouping
-    data <- data %>%
-        group_by(!!sym(group), class)
-    
-    # Basic stats
     sum <- data %>%
-        summarize(
-            n_prv = sum(!is.na(Prscrbr_NPI)),
-            n_cl = sum(tot_clms, na.rm = TRUE),
+        group_by(!!sym(group), class) %>%
+        dplyr::summarize(
+            n_prscrbr = sum(!is.na(Prscrbr_NPI)),
+            n_rows_na_claims = sum(is.na(tot_clms)),
+            n_claims = sum(tot_clms, na.rm = TRUE),
+            n_rows_na_ben = sum(is.na(Tot_Benes)),
             n_ben = sum(Tot_Benes, na.rm = TRUE),
             n_ben_imp = sum(Tot_Benes_Imp, na.rm = TRUE),
-            mn_ben = mean(Tot_Benes, na.rm = TRUE),
+            mean_ben = mean(Tot_Benes, na.rm = TRUE),
             sd_ben = sd(Tot_Benes, na.rm = TRUE),
             min_ben = min(Tot_Benes, na.rm = TRUE),
             max_ben = max(Tot_Benes, na.rm = TRUE),
-            .groups = "keep") %>%
-        
-        # Weighted by Tot_Benes
-        left_join(
-            data %>%
-                filter(!is.na(Tot_Benes)) %>%
-                summarize(
-                    mn_age_wt = weighted.mean(Bene_Avg_Age, Tot_Benes,
-                                              na.rm = TRUE),
-                    sd_age_wt = weighted.sd(Bene_Avg_Age, Tot_Benes,
-                                            na.rm = TRUE),
-                    mn_hcc_wt = weighted.mean(Bene_Avg_Risk_Scre, Tot_Benes,
-                                              na.rm = TRUE),
-                    sd_hcc_wt = weighted.sd(Bene_Avg_Risk_Scre, Tot_Benes,
-                                            na.rm = TRUE),
-                    min_hcc = min(Bene_Avg_Risk_Scre, na.rm = TRUE),
-                    max_hcc = max(Bene_Avg_Risk_Scre, na.rm = TRUE),
-                    mn_fem_wt = weighted.mean(percent_fem, Tot_Benes,
-                                              na.rm = TRUE),
-                    mn_cl_wt = weighted.mean(tot_clms, Tot_Benes, na.rm = TRUE),
-                    sd_cl_wt = weighted.sd(tot_clms, Tot_Benes, na.rm = TRUE),
-                    mn_cl_1k_wt = weighted.mean(claims_1k, Tot_Benes,
-                                                na.rm = TRUE),
-                    sd_cl_1k_wt = weighted.sd(claims_1k, Tot_Benes,
-                                              na.rm = TRUE),
-                    min_cl_1k = min(claims_1k, na.rm = TRUE),
-                    max_cl_1k = max(claims_1k, na.rm = TRUE),
-                    .groups = "keep"),
-            by = group) %>%
-        
-        # Unweighted
-        left_join(
-            data %>%
-                summarize(
-                    mn_age_unwt = mean(Bene_Avg_Age, na.rm = TRUE),
-                    mn_hcc_unwt = mean(Bene_Avg_Risk_Scre, na.rm = TRUE),
-                    mn_fem_unwt = mean(percent_fem, na.rm = TRUE),
-                    mn_cl_unwt = mean(tot_clms, na.rm = TRUE),
-                    mn_ben_unwt = mean(Tot_Benes, na.rm = TRUE),
-                    mn_cl_1k_unwt = mean(claims_1k, na.rm = TRUE),
-                    .groups = "keep"),
-            by = group)
-    return(sum %>% group_by(!!sym(group)))
+            n_rows_na_age = sum(is.na(Bene_Avg_Age)),
+            mean_age_wt = wtd.mean(Bene_Avg_Age, Tot_Benes,
+                                   normwt = FALSE,
+                                   na.rm = TRUE),
+            sd_age_wt = weighted.sd(Bene_Avg_Age, Tot_Benes,
+                                    na.rm = TRUE),
+            n_rows_na_hcc = sum(is.na(Bene_Avg_Risk_Scre)),
+            mean_hcc_wt = wtd.mean(Bene_Avg_Risk_Scre, Tot_Benes,
+                                   normwt = FALSE,
+                                   na.rm = TRUE),
+            sd_hcc_wt = weighted.sd(Bene_Avg_Risk_Scre, Tot_Benes,
+                                    na.rm = TRUE),
+            min_hcc = min(Bene_Avg_Risk_Scre, na.rm = TRUE),
+            max_hcc = max(Bene_Avg_Risk_Scre, na.rm = TRUE),
+            n_rows_na_fem = sum(is.na(percent_fem)),
+            mean_fem_wt = wtd.mean(percent_fem, Tot_Benes,
+                                   normwt = FALSE,
+                                   na.rm = TRUE),
+            mean_claims_wt = wtd.mean(tot_clms, Tot_Benes,
+                                      normwt = FALSE,
+                                      na.rm = TRUE),
+            sd_claims_wt = weighted.sd(tot_clms, Tot_Benes, na.rm = TRUE),
+            n_rows_na_claims_1k = sum(is.na(claims_1k)),
+            mean_claims_1k_wt = wtd.mean(claims_1k, Tot_Benes,
+                                         normwt = FALSE,
+                                         na.rm = TRUE),
+            sd_claims_1k_wt = weighted.sd(claims_1k, Tot_Benes,
+                                      na.rm = TRUE),
+            ci_claims_1k_lower = weighted.ci(claims_1k, Tot_Benes, "lower",
+                                          conf.level = 0.95),
+            ci_claims_1k_upper = weighted.ci(claims_1k, Tot_Benes, "upper",
+                                             conf.level = 0.95),
+            lower_ci_claims_1k_wt = wtd.quantile(claims_1k, Tot_Benes,
+                                       probs = c(0.025),
+                                       normwt = FALSE,
+                                       na.rm = TRUE),
+            upper_ci_claims_1k_wt = wtd.quantile(claims_1k, Tot_Benes,
+                                       probs = c(0.975),
+                                       normwt = FALSE,
+                                       na.rm = TRUE),
+            min_claims_1k = min(claims_1k, na.rm = TRUE),
+            max_claims_1k = max(claims_1k, na.rm = TRUE),
+            mean_age_unwt = mean(Bene_Avg_Age, na.rm = TRUE),
+            mean_hcc_unwt = mean(Bene_Avg_Risk_Scre, na.rm = TRUE),
+            mean_fem_unwt = mean(percent_fem, na.rm = TRUE),
+            mean_claims_unwt = mean(tot_clms, na.rm = TRUE),
+            mean_ben_unwt = mean(Tot_Benes, na.rm = TRUE),
+            mean_claims_1k_unwt = mean(claims_1k, na.rm = TRUE),
+            .groups = "drop") %>%
+        mutate(se_claims_1k_wt = sd_claims_1k_wt / sqrt(n_prscrbr)) %>%
+        group_by(!!sym(group))
+    return(sum)
 }
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -621,14 +652,14 @@ format_ben_table <- function(data) {
     group <- data %>% group_keys() %>% names()
     
     if(group == "Year") { data <- data %>% arrange(desc(Year)) }
-    if(group == "Provider Type") { data <- data %>% arrange(desc(mn_ben)) }
+    if(group == "Provider Type") { data <- data %>% arrange(desc(mean_ben)) }
     
     # Format beneficiary table
     data %>%
         mutate(
-            mn_ben = paste0(
+            mean_ben = paste0(
                 format(
-                    mn_ben,
+                    mean_ben,
                     nsmall = 2,
                     digits = 2,
                     big.mark = ","
@@ -657,9 +688,9 @@ format_ben_table <- function(data) {
                     big.mark = ","
                 )
             ),
-            mn_age_wt = paste0(
+            mean_age_wt = paste0(
                 format(
-                    mn_age_wt,
+                    mean_age_wt,
                     nsmall = 2,
                     digits = 2,
                     big.mark = ","
@@ -673,10 +704,10 @@ format_ben_table <- function(data) {
                 ),
                 ")"
             ),
-            mn_fem_wt = format(mn_fem_wt, nsmall = 1, digits = 2),
-            mn_hcc_wt = paste0(
+            mean_fem_wt = format(mean_fem_wt, nsmall = 1, digits = 2),
+            mean_hcc_wt = paste0(
                 format(
-                    mn_hcc_wt,
+                    mean_hcc_wt,
                     nsmall = 2,
                     digits = 2,
                     big.mark = ","
@@ -708,11 +739,11 @@ format_ben_table <- function(data) {
         ) %>%
         select(!!sym(group),
                class,
-               mn_ben,
+               mean_ben,
                ben_range,
-               mn_age_wt,
-               mn_fem_wt,
-               mn_hcc_wt,
+               mean_age_wt,
+               mean_fem_wt,
+               mean_hcc_wt,
                hcc_range) %>%
         datatable(
             options = list(dom = "t"),
@@ -741,30 +772,31 @@ format_use_table <- function(data) {
     group <- data %>% group_keys() %>% names()
     
     if(group == "Year") { data <- data %>% arrange(desc(Year)) }
-    if(group == "Provider Type") { data <- data %>% arrange(desc(mn_cl_1k_wt)) }
+    if(group == "Provider Type") { data <- data %>%
+        arrange(desc(mean_claims_1k_wt)) }
     
     # Format beneficiary table
     data %>%
         mutate(
-            mn_cl = paste0(
+            mean_claims = paste0(
                 format(
-                    mn_cl_wt,
+                    mean_claims_wt,
                     nsmall = 2,
                     digits = 2,
                     big.mark = ","
                 ),
                 " (",
                 format(
-                    sd_cl_wt,
+                    sd_claims_wt,
                     nsmall = 2,
                     digits = 2,
                     big.mark = ","
                 ),
                 ")"
             ),
-            mn_ben = paste0(
+            mean_ben = paste0(
                 format(
-                    mn_ben,
+                    mean_ben,
                     nsmall = 2,
                     digits = 2,
                     big.mark = ","
@@ -778,32 +810,47 @@ format_use_table <- function(data) {
                 ),
                 ")"
             ),
-            mn_cl_1k = paste0(
+            mean_claims_1k = paste0(
                 format(
-                    mn_cl_1k_wt,
+                    mean_claims_1k_wt,
                     nsmall = 2,
                     digits = 2,
                     big.mark = ","
                 ),
                 " (",
                 format(
-                    sd_cl_1k_wt,
+                    sd_claims_1k_wt,
                     nsmall = 2,
                     digits = 2,
                     big.mark = ","
                 ),
                 ")"
             ),
-            cl_1k_range = paste0(
+            claims_1k_ci = paste0(
                 format(
-                    min_cl_1k,
+                    lower_ci_claims_1k_wt,
                     nsmall = 0,
                     digits = 2,
                     big.mark = ","
                 ),
                 "-",
                 format(
-                    max_cl_1k,
+                    upper_ci_claims_1k_wt,
+                    nsmall = 0,
+                    digits = 2,
+                    big.mark = ","
+                )
+            ),
+            claims_1k_range = paste0(
+                format(
+                    min_claims_1k,
+                    nsmall = 0,
+                    digits = 2,
+                    big.mark = ","
+                ),
+                "-",
+                format(
+                    max_claims_1k,
                     nsmall = 0,
                     digits = 2,
                     big.mark = ","
@@ -811,10 +858,11 @@ format_use_table <- function(data) {
             )) %>%
         select(!!sym(group),
                class,
-               mn_cl,
-               mn_ben,
-               mn_cl_1k,
-               cl_1k_range) %>%
+               mean_claims,
+               mean_ben,
+               mean_claims_1k,
+               claims_1k_ci,
+               claims_1k_range) %>%
         datatable(
             options = list(dom = "t"),
             rownames = FALSE,
@@ -824,9 +872,9 @@ format_use_table <- function(data) {
                 "Mean (SD) Claims",
                 "Mean (SD) Beneficiary Count",
                 "Mean (SD) Claims / 1K Beneficiaries",
+                "95% CI, Mean Claims / 1K Beneficiaries",
                 "Range Claims / 1K Beneficiaries"
             )
         ) %>%
         return()
 }
-

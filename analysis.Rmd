@@ -6,13 +6,11 @@ output: html_document
 ---
 
 ```{r setup, include = FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+# knitr::opts_chunk$set(echo = TRUE)
+
+# Make default image type SVG
+knitr::opts_chunk$set(dev = "svg")
 ```
-
-### Distribution of claims per 1K beneficiary
-
-- Second and fourth figures are claims_1k where missing beneficiary counts have been imputed.
-- Last two figures show that normality improves when claims_1k is logged.
 
 ```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
@@ -27,11 +25,99 @@ knitr::opts_chunk$set(echo = TRUE)
 # is a bit misleading, since in the by-provider dataset we're getting a count of
 # beneficiaries who had a prescription for *any* drug.
 
+# add <- read_feather("Address-name bank.feather")
+# 
+# # Get all zips across all years
+# idaho_zips <- p %>%
+#     select(zip = Prscrbr_Zip5) %>%
+#     unique()
+
+# Get county for each zip
+# Construct API URL
+
+
+# counties <- map_dfr(add %>%
+#                         filter(status != "ZERO_RESULTS") %>%
+#                         pull(query_string) %>%
+#                         unique(),
+#                     function(query_string) {
+#     message(paste0("Retrieving county for string ", query_string, "."))
+#     api_url <- paste0(
+#     "https://maps.googleapis.com/maps/api/geocode/json?address=",
+#     query_string,
+#     "&key=",
+#     api_key)
+#     results <- fromJSON(api_url)
+#     tibble(query_string = query_string,
+#            results$results$address_components[[1]])
+# })
+# saveRDS(counties, "county names.rds")
+
+
+# readRDS("county names.rds")
+# 
+# # Strings that resolve to ID counties
+# id_queries <- counties %>%
+#     filter(short_name == "ID") %>%
+#     pull(query_string) %>%
+#     unique()
+# 
+# # Find queries that didn't return Idaho
+# not_id <- counties %>%
+#     filter(!query_string %in% id_queries) %>%
+#     pull(query_string) %>%
+#     unique()
+# 
+# # Vector of non-Idaho counties
+# not_id_counties <- counties %>%
+#     filter(
+#         !query_string %in% id_queries |
+#             long_name == "Southwest Ada County Alliance",
+#            str_detect(long_name, "County")) %>%
+#     pull(long_name) %>%
+#     unique()
+# 
+# # County-query table
+# county_query <- counties %>%
+#     filter(str_detect(long_name, "County"),
+#            !long_name %in% not_id_counties) %>%
+#     select(county = long_name, query_string) %>%
+#     unique()
+# 
+# # Unique Idaho counties represented in county_query table. Missing a single county.
+# county_query %>%
+#     select(county) %>%
+#     unique() %>%
+#     nrow()
+# 
+# # Join county names back to add
+# add2 <- add %>%
+#     left_join(county_query, by = "query_string")
+# 
+# # These are 28 rows missing a county
+# add2 %>%
+#     filter(is.na(county))
+# 
+
+
+
+
+
+
+
+
+
+# Join back in by NPI or dataset_address?
+
+
+
+
+
 # Read in generic drug bank
 generics <- read_feather("Generic drug bank.feather")
 
-# Read in 2019 provider types
-p_types <- read_feather("Idaho 2019 provider type bank.feather")
+# Read in provider type bank
+p_types <- read_feather("Idaho provider type bank.feather")
 
 # Read in by-provider-and-drug dataset. This has claims numbers for computing
 # claims per 1K beneficiaries.
@@ -45,71 +131,309 @@ pd <- read_feather("Idaho prescribers by provider & drug data.feather") %>%
 # per 1K beneficiaries. Join in prescriber type (only have this for 2019 so
 # far).
 p <- read_feather("Idaho prescribers by provider data.feather") %>%
-    select(Prscrbr_NPI, year, Tot_Benes, Prscrbr_RUCA, Prscrbr_Type,
-           Bene_Avg_Age, Bene_Feml_Cnt, Bene_Avg_Risk_Scre) %>%
-    mutate(Tot_Benes_Imp = Tot_Benes) %>%
-    left_join(p_types, by = c("Prscrbr_Type", "year"))
+    select(
+        Prscrbr_NPI,
+        year,
+        Antbtc_Tot_Clms,
+        Tot_Benes,
+        Prscrbr_RUCA,
+        Prscrbr_Type,
+        Prscrbr_Gndr,
+        Prscrbr_St1,
+        Prscrbr_St2,
+        Prscrbr_City,
+        Prscrbr_State_Abrvtn,
+        Prscrbr_Zip5,
+        Bene_Avg_Age,
+        Bene_Feml_Cnt,
+        Bene_Avg_Risk_Scre,
+        Bene_Race_Wht_Cnt,
+        Bene_Race_Black_Cnt,
+        Bene_Race_Api_Cnt,
+        Bene_Race_Hspnc_Cnt,
+        Bene_Race_Natind_Cnt,
+        Bene_Race_Othr_Cnt,
+        Bene_Dual_Cnt,
+        Bene_Ndual_Cnt
+    ) %>%
+    mutate(Tot_Benes_Imp = Tot_Benes,
+           percent_fem = Bene_Feml_Cnt / Tot_Benes) %>%
+    
+    # Join in standardized prescriber type info
+    left_join(p_types, by = c("Prscrbr_Type")) %>%
+    
+    # Concatenate address companents
+    mutate(
+            dataset_address = str_squish(
+                paste(
+                    Prscrbr_St1,
+                    Prscrbr_St2,
+                    Prscrbr_City,
+                    Prscrbr_State_Abrvtn,
+                    Prscrbr_Zip5
+                )
+            )
+        )
+# %>%
+    
+    # Join county
+    # left_join(add2, by = "dataset_address")
+    
+# List of ~ 1K addresses curently missing counties
+# p %>% filter(is.na(county)) %>%
+#     select(dataset_address) %>%
+#     unique()
+
+```
+
+
+### Counts of providers per year
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Counts of providers per year
+p %>%
+    count(year)
+```
+
+### No missing provider type info
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+# There's no missing provider type info
+p %>%
+    select(year, Prscrbr_Type, Std_Provider_Type) %>%
+    group_by(year) %>%
+    summarize_all(~ sum(is.na(.)) / n())
+
+```
+
+### What the basic data look like
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # Separate into tables based on whether Tot_Benes is defined or not
-yes_benes <- p %>% filter(!is.na(Tot_Benes))
-no_benes <- p %>% filter(is.na(Tot_Benes))
-
-# For NA values, impute
-# NOTE: Can we also impute values for other cols? Most of these are subject to
-# the > 10 beneficiary rule.
-set.seed(1)
-no_benes$Tot_Benes_Imp <- round(rnorm(n = nrow(no_benes), mean = 5.5, sd = 1.5))
-no_benes <- no_benes %>%
-    mutate(Tot_Benes_Imp = case_when(
-        Tot_Benes_Imp > 10 ~ 10,
-        Tot_Benes_Imp < 1 ~ 1,
-        TRUE ~ Tot_Benes_Imp))
-
-# Recombine to form p_benes with imputed values for NA Tot_Benes
-p <- bind_rows(yes_benes, no_benes) %>%
-    mutate(percent_fem = Bene_Feml_Cnt / Tot_Benes * 100,
-           percent_fem_imp = Bene_Feml_Cnt / Tot_Benes_Imp * 100)
+# yes_benes <- p %>% filter(!is.na(Tot_Benes))
+# no_benes <- p %>% filter(is.na(Tot_Benes))
+# 
+# # For NA values, impute
+# # NOTE: Can we also impute values for other cols? Most of these are subject to
+# # the > 10 beneficiary rule.
+# set.seed(1)
+# no_benes$Tot_Benes_Imp <- round(rnorm(n = nrow(no_benes), mean = 5.5, sd = 1.5))
+# no_benes <- no_benes %>%
+#     mutate(Tot_Benes_Imp = case_when(
+#         Tot_Benes_Imp > 10 ~ 10,
+#         Tot_Benes_Imp < 1 ~ 1,
+#         TRUE ~ Tot_Benes_Imp))
+# 
+# # Recombine to form p_benes with imputed values for NA Tot_Benes
+# p <- bind_rows(yes_benes, no_benes) %>%
+#     mutate(percent_fem = Bene_Feml_Cnt / Tot_Benes * 100,
+#            percent_fem_imp = Bene_Feml_Cnt / Tot_Benes_Imp * 100)
 
 # Drug classes that we want to compute claims per 1K beneficiaries for
 drug_classes <- names(generics)[2:length(names(generics))]
 
-# Summarize across drugs to get total claims per drug *class*. Join in
-# beneficiary data.
-p2 <- map_dfr(drug_classes, function(class) {
-    message(paste0("Getting claim & beneficiary data for class ", class, "..."))
-    claims_year(data = pd, drug_class = class) %>%
-        right_join(p, by = c("Prscrbr_NPI", "year")) %>%
-        mutate(class = class) }) %>%
+# Cross every provider NPI appearing in 2013-2019 p data with each year from
+# 2013-2019 with all 11 drug classes.
+crossed <- expand_grid(year = unique(p$year),
+                          class = drug_classes,
+                          Prscrbr_NPI = unique(p$Prscrbr_NPI))
+
+# Summarize total claims per provider per year per drug class from pd
+pd2 <- map_dfr(drug_classes, function(class) {
+    message(paste0("Getting claim data for class ", class, "..."))
+    pd %>%
+        filter(!!sym(class) == 1) %>%
+        group_by(Prscrbr_NPI, year) %>%
+        dplyr::summarize(
+            n_drugs = sum(!is.na(Tot_Clms)),
+            n_na_tot_clms = sum(is.na(Tot_Clms)),
+            tot_clms = sum(Tot_Clms, na.rm = TRUE),
+            .groups = "drop") %>%
+        mutate(class = class) })
+
+# Join summarized claims data to crossed
+pd3 <- crossed %>%
+    left_join(pd2, by = c("Prscrbr_NPI", "year", "class"))
+
+# Join pd3 to p
+p2 <- p %>%
+    left_join(pd3, by = c("Prscrbr_NPI", "year")) %>%
     mutate(tot_clms = if_else(is.na(tot_clms), 0, tot_clms),
            claims_1k = tot_clms / (Tot_Benes / 1000),
-           claims_1k_imp = tot_clms / (Tot_Benes_Imp / 1000),
-           
-           # NOTE: We now have lots of zeros, and log(0) is undefined. Model as
-           # proportion data (negative binomial?) since that's actually what it is.
+           claims_ben_ratio = tot_clms / Tot_Benes,
            log_claims_1k = log(claims_1k),
-           log_claims_1k_imp = log(claims_1k_imp))
+           log_claims_1k_one = log(claims_1k + 1))
+    
+
+# Get min nonzero claims_1k by class by year
+mins <- p2 %>%
+    filter(claims_1k != 0) %>%
+    group_by(year, class) %>%
+    dplyr::summarize(claims_1k_min = min(claims_1k, na.rm = TRUE),
+                     .groups = "drop")
+
+# Join in min nonzero values
+p3 <- p2 %>%
+    left_join(mins, by = c("year", "class")) %>%
+    mutate(log_claims_1k_half_min = log(claims_1k + claims_1k_min / 2))
+
+
+
+
+
+
+# 
+#     pd %>%
+#         filter(!!sym(class) == 1) %>%
+#         group_by(.drop = FALSE) %>%
+#         group_by(Prscrbr_NPI, year) %>%
+#         dplyr::summarize(
+#             n_drugs = sum(!is.na(Tot_Clms)),
+#             n_na_tot_clms = sum(is.na(Tot_Clms)),
+#             tot_clms = sum(Tot_Clms, na.rm = TRUE), .groups = "drop") %>%
+#         mutate(class = class) %>%
+#         right_join(p, by = c("Prscrbr_NPI", "year")) }) %>%
+#     mutate(tot_clms = if_else(is.na(tot_clms), 0, tot_clms),
+#            claims_1k = tot_clms / (Tot_Benes / 1000),
+#            claims_1k_imp = tot_clms / (Tot_Benes_Imp / 1000),
+#            
+#            # NOTE: We now have lots of zeros, and log(0) is undefined. Model as
+#            # proportion data (negative binomial?) since that's actually what it is.
+#            log_claims_1k = log(claims_1k),
+#            log_claims_1k_imp = log(claims_1k_imp))
+# 
+# # Summarize across drugs to get total claims per drug *class*. Join in
+# # beneficiary data.
+# p2 <- map_dfr(drug_classes, function(class) {
+#     message(paste0("Getting claim data for class ", class, "..."))
+#     pd %>%
+#         filter(!!sym(class) == 1) %>%
+#         # filter(Antibiotic == 1) %>%
+#         # filter(Tetracycline == 1) %>%
+#         group_by(.drop = FALSE) %>%
+#         group_by(Prscrbr_NPI, year) %>%
+#         dplyr::summarize(
+#             n_drugs = sum(!is.na(Tot_Clms)),
+#             n_na_tot_clms = sum(is.na(Tot_Clms)),
+#             tot_clms = sum(Tot_Clms, na.rm = TRUE), .groups = "drop") %>%
+#         mutate(class = class)
+# })
+#     
+#     %>%
+#         right_join(p, by = c("Prscrbr_NPI", "year")) }) %>%
+#     mutate(tot_clms = if_else(is.na(tot_clms), 0, tot_clms),
+#            claims_1k = tot_clms / (Tot_Benes / 1000),
+#            claims_1k_imp = tot_clms / (Tot_Benes_Imp / 1000),
+#            
+#            # NOTE: We now have lots of zeros, and log(0) is undefined. Model as
+#            # proportion data (negative binomial?) since that's actually what it is.
+#            log_claims_1k = log(claims_1k),
+#            log_claims_1k_imp = log(claims_1k_imp))
 
 # p2 has one row per provider per year per drug class
-p2 %>% count(class, year)
-p2 %>% count(year, class)
+# p3 %>% count(class, year)
+# p3 %>% count(year, class)
 
 # Example prescriber: for 2013 we have rows for each drug class. Tot_Benes is always the same because it doesn't change over a year. tot_clms is per drug class.
-(p2 %>%
-    filter(Prscrbr_NPI == "1003012204") %>%
-    select(Prscrbr_NPI, year, class, tot_clms, Tot_Benes) %>%
-    arrange(year, class))[1:11,]
+# NAs here mean that the join of pd to p by NPI & year failed. We keep the columns from p (npi, year, benes) but we get NA for the cols from pd (class & tot_clms). Doesn't make sense. If the join worked...
+# A provider never provided an rx for drug X in 2019. That means there won't be a row for the drug in pd 2019. So when you try to join that to p you'll get NA
+p3 %>%
+    filter(Prscrbr_NPI == "1003012204", year == 2013) %>%
+    dplyr::select(Prscrbr_NPI, year, class, tot_clms, Tot_Benes)
 
 # Same story for 2014
-(p2 %>%
-    filter(Prscrbr_NPI == "1003012204") %>%
-    select(Prscrbr_NPI, year, class, tot_clms, Tot_Benes) %>%
-    arrange(year, class))[12:22,]
+p3 %>%
+    filter(Prscrbr_NPI == "1003012204", year == 2014) %>%
+    dplyr::select(Prscrbr_NPI, year, class, tot_clms, Tot_Benes) %>%
+    arrange(year, class)
 
 # Same story for 2019
-(p2 %>%
-    filter(Prscrbr_NPI == "1003012204") %>%
-    select(Prscrbr_NPI, year, class, tot_clms, Tot_Benes) %>%
-    arrange(year, class))[67:77,]
+p3 %>%
+    filter(Prscrbr_NPI == "1003012204", year == 2019) %>%
+    dplyr::select(Prscrbr_NPI, year, class, tot_clms, Tot_Benes) %>%
+    arrange(year, class)
+
+```
+
+### Source of the numerator in claims / 1K beneficiaries
+
+A recent report by Gouin and colleagues (2022) based on Medicare Part D data shows antibiotics claims of ~ 400 per 1K beneficiaries. In contrast, I'm seeing numbers closer to ~ 200 per 1K. Most of this seems to be related to the dataset that claims numbers are coming from. In Gouin et al. they're taking claims numbers from the by-provider dataset. In this dataset, each row represents a provider, and a column labeled Antbtc_Tot_Clms gives all of the antibiotic claims that provider has for the given year. In contrast, I'm taking claims numbers from the by-provider-and-drug dataset. For this dataset, each row gives info for a particular provider for a particular drug. We identify all of drugs that are antibiotics and add up the claims to get a total number of antibiotic claims a provider has in a given year.
+
+Crucially for the by-provider-and-drug dataset, rows with < 11 claims are *not included*. This means that we're missing claims. This isn't as big an issue in the by-provider dataset because (1) the antibiotic count is aggregated across lots of different drugs, so the numbers are more often >= 11, and (2) even when the number is lower, rows with NA *are included*. This allows for imputation.
+
+In the figure below I show that antibiotic claims per 1K beneficiaries is quite a bit lower when the numerator (the number of claims) comes from the by-provider-and-drug dataset (pd) versus the by-provider dataset (p).
+
+This isn't necessarily a problem--just need to explain how we're computing the stat. The way we're doing it is giving us the ability to break out different kinds of antibiotics, but at the expense of missing rows, which means we're consistently underestimating.
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Comparison between x and y shows that mean claims / 1K is higher when computing with the number of antibiotic claims from the by-providers dataset (x) than the by-providers-and-drug dataset (y). This is probably why my numbers seem lower than what's reported in Gouin (2022). Find out how the Antbtc_Tot_Clms column is computed in the by-providers dataset. Want to try to approximate what it's doing as closely as possible when getting numerators from by-provider-and-drug. Also, are we correctly coding for all antibiotics in by-provider-and-drug? Looks like the number of prescribers and beneficiaries is the same across the two datasets, but the number of claims is quite a bit lower when we take it from provider-by-drug, leading to lower claims per 1k beneficiaries. Probably one thing that's going on is that we lose all rows in provider-by-drug that are < 11. So that pushes our claim counts lower. Not as much of an issue in by-provider because the antibiotic claim counts get aggregated to much larger numbers, so fewer < 11. And we can't impute in the pd table since the rows that would have NAs have been removed before we get to it.
+p_vs_pd_num <- bind_rows(
+    p %>%
+        mutate(Tot_Benes = if_else(is.na(Tot_Benes), 10, Tot_Benes),
+               numerator = "p") %>%
+        group_by(year, numerator) %>%
+        dplyr::summarize(
+            n_prscrbr = sum(!is.na(Prscrbr_NPI)),
+            n_benes = sum(Tot_Benes, na.rm = TRUE),
+            n_claims = sum(Antbtc_Tot_Clms, na.rm = TRUE),
+            mean_benes = mean(Tot_Benes, na.rm = TRUE),
+            mean_claims = mean(Antbtc_Tot_Clms, na.rm = TRUE),
+            mean_claims_1k = mean(Antbtc_Tot_Clms / (Tot_Benes / 1000),
+                                  na.rm = TRUE),
+            .groups = "drop"),
+    p3 %>%
+        filter(class == "Antibiotic") %>%
+        mutate(Tot_Benes = if_else(is.na(Tot_Benes), 10, Tot_Benes),
+               numerator = "pd") %>%
+        group_by(year, numerator) %>%
+        dplyr::summarize(
+            n_prscrbr = sum(!is.na(Prscrbr_NPI)),
+            n_benes = sum(Tot_Benes, na.rm = TRUE),
+            n_claims = sum(tot_clms, na.rm = TRUE),
+            mean_benes = mean(Tot_Benes, na.rm = TRUE),
+            mean_claims = mean(tot_clms, na.rm = TRUE),
+            mean_claims_1k = mean(tot_clms / (Tot_Benes / 1000),
+                                  na.rm = TRUE),
+            .groups = "drop"))
+
+# Fewer claims when summarized from the by-provider-and-drug table versus the by-provider table.
+p_vs_pd_num %>%
+    ggplot(aes(
+        x = year,
+        y = mean_claims,
+        group = numerator,
+        color = numerator)) +
+    geom_line()
+
+# Mean number of beneficiaries. These are identical because we're always taking
+# the number of beneficiaries from the by-provider table.
+posd = position_dodge(0.4)
+p_vs_pd_num %>%
+    ggplot(aes(
+        x = year,
+        y = mean_benes,
+        group = numerator,
+        color = numerator)) +
+    geom_line(position = posd) +
+    labs(subtitle = str_wrap("Beneficiary numbers don't vary--always from the by-providers table", 40))
+
+# Lower mean claims / 1k beneficiaries when claims come from the by-provider-and-drug table versus the by-provider table.
+p_vs_pd_num %>%
+    ggplot(aes(
+        x = year,
+        y = mean_claims_1k,
+        group = numerator,
+        color = numerator)) +
+    geom_line()
+
+```
+
+## Summary tables for beneficiaries and use
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # Modeling notes:
 # We're actually modeling proportions: number of claims out of number of beneficiaries. So some type of GLM: poisson, negative binomial...
@@ -211,37 +535,52 @@ p2 %>% count(year, class)
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #### Summary tables ####
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+```
 
+### Beneficiary tables for antibiotics and cephalosporin by year
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 # Beneficiary table by year
-p2 %>%
+p3 %>%
     filter(class == "Antibiotic") %>%
     rename(Year = year) %>%
     compute_summary_table(group = "Year") %>%
     format_ben_table()
 
 # Beneficiary data stays the same, regardless of the class of antibiotics chosen
-p2 %>%
+p3 %>%
     filter(class == "Cephalosporin") %>%
     rename(Year = year) %>%
     compute_summary_table(group = "Year") %>%
     format_ben_table()
+```
+
+### 2019 beneficiary summaries by provider type
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # 2019 beneficiary table by provider type
-p2 %>%
+p3 %>%
     filter(class == "Antibiotic", year == 2019) %>%
     rename(`Provider Type` = Std_Provider_Type) %>%
     compute_summary_table(group = "Provider Type") %>%
     format_ben_table()
 
 # Again, beneficiary data stays the same, regardless of drug class
-p2 %>%
+p3 %>%
     filter(class == "Cephalosporin", year == 2019) %>%
     rename(`Provider Type` = Std_Provider_Type) %>%
     compute_summary_table(group = "Provider Type") %>%
     format_ben_table()
 
+```
+
+### Antibiotic & Cephalosporin use by year
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
 # Use table by year
-p2 %>%
+p3 %>%
     filter(class == "Antibiotic") %>%
     rename(Year = year) %>%
     compute_summary_table(group = "Year") %>%
@@ -249,14 +588,19 @@ p2 %>%
 
 # Mean beneficiary count stays the same by year, but other cols change with a
 # different drug.
-p2 %>%
+p3 %>%
     filter(class == "Cephalosporin") %>%
     rename(Year = year) %>%
     compute_summary_table(group = "Year") %>%
     format_use_table()
+```
+
+### 2019 Antibiotic use by provider type
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # 2019 use table by provider type
-p2 %>%
+p3 %>%
     filter(class == "Antibiotic", year == 2019) %>%
     rename(`Provider Type` = Std_Provider_Type) %>%
     compute_summary_table(group = "Provider Type") %>%
@@ -264,112 +608,1216 @@ p2 %>%
 
 ```
 
+### Comparison of weighted versus unweighted means
+
 ```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-# ADD IN FIGURES COMPARING WEIGHTED & UNWEIGHTED
-
 # Number of providers per year
-p2 %>%
+p3 %>%
     filter(class == "Antibiotic") %>%
     compute_summary_table(group = "year") %>%
-    ggplot(mapping = aes(x = year, y = n_prv)) +
+    ggplot(mapping = aes(x = year, y = n_prscrbr)) +
     geom_line()
                
 # Mean beneficiaries by year
-p2 %>%
+p3 %>%
     filter(class == "Antibiotic") %>%
     compute_summary_table(group = "year") %>%
-    ggplot(mapping = aes(x = year, y = mn_ben)) +
+    ggplot(mapping = aes(x = year, y = mean_ben)) +
     geom_line() +
-    geom_errorbar(aes(ymin = mn_ben - sd_ben,
-                      ymax = mn_ben + sd_ben),
+    geom_errorbar(aes(ymin = mean_ben - sd_ben,
+                      ymax = mean_ben + sd_ben),
                   width = 0.2,
                   size = 0.5)
 
 # Mean beneficiary age per year
-p2 %>%
+p3 %>%
     filter(class == "Antibiotic") %>%
     compute_summary_table(group = "year") %>%
-    select(year, mn_age_wt, mn_age_unwt) %>%
-    pivot_longer(cols = matches("mn_age"), names_to = "type",
+    select(year, mean_age_wt, mean_age_unwt) %>%
+    pivot_longer(cols = matches("mean_age"), names_to = "type",
                  values_to = "mean") %>%
     ggplot(mapping = aes(x = year, y = mean, color = type, group = type)) +
     geom_line()
 
 # Mean % female per year
-p2 %>%
+p3 %>%
     filter(class == "Antibiotic") %>%
     compute_summary_table(group = "year") %>%
-    select(year, mn_fem_wt, mn_fem_unwt) %>%
-    pivot_longer(cols = matches("mn_fem"), names_to = "type",
+    select(year, mean_fem_wt, mean_fem_unwt) %>%
+    pivot_longer(cols = matches("mean_fem"), names_to = "type",
                  values_to = "mean") %>%
     ggplot(mapping = aes(x = year, y = mean, color = type, group = type)) +
     geom_line()
 
 # Mean hcc per year
-p2 %>%
+p3 %>%
     filter(class == "Antibiotic") %>%
     compute_summary_table(group = "year") %>%
-    select(year, mn_hcc_wt, mn_hcc_unwt) %>%
-    pivot_longer(cols = matches("mn_hcc"), names_to = "type",
+    select(year, mean_hcc_wt, mean_hcc_unwt) %>%
+    pivot_longer(cols = matches("mean_hcc"), names_to = "type",
                  values_to = "mean") %>%
     ggplot(mapping = aes(x = year, y = mean, color = type, group = type)) +
     geom_line()
 
 # Mean claims per year
-p2 %>%
+p3 %>%
     filter(class == "Antibiotic") %>%
     compute_summary_table(group = "year") %>%
-    select(year, mn_cl_wt, mn_cl_unwt) %>%
-    pivot_longer(cols = matches("mn_cl"), names_to = "type",
+    select(year, mean_claims_wt, mean_claims_unwt) %>%
+    pivot_longer(cols = matches("mean_claims"), names_to = "type",
                  values_to = "mean") %>%
     ggplot(mapping = aes(x = year, y = mean, color = type, group = type)) +
     geom_line()
 
 # Mean claims per 1k beneficiaries per year
-p2 %>%
+p3 %>%
     filter(class == "Antibiotic") %>%
     compute_summary_table(group = "year") %>%
-    select(year, mn_cl_1k_wt, mn_cl_1k_unwt) %>%
-    pivot_longer(cols = matches("mn_cl"), names_to = "type",
+    select(year, mean_claims_1k_wt, mean_claims_1k_unwt) %>%
+    pivot_longer(cols = matches("mean_claims"), names_to = "type",
                  values_to = "mean") %>%
     ggplot(mapping = aes(x = year, y = mean, color = type, group = type)) +
     geom_line()
+
+```
+
+### claims_1k ~ year for each drug class
+
+CIs currently show 95% quantiles. Want to change this to a bootstrapped 95% CI on the mean.
+
+Models are OLS of claims_1k ~ year, which is not normally distributed. Looks like it's mostly zeros and probably over-dispersed.
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.height = 8, fig.width = 11}
+
+# Copy dataset
+
+# Create y response variable. y will be interpreted as the proportion of all beneficiaries that were prescribed the drug
+# p3$y <- cbind(p2$tot_clms, p2$Tot_Benes)
+
+# Model y as binomially-distributed function of year
+# fit <- glm(y ~ year, data = p3 %>% filter(class == "Antibiotic"), family = "binomial")
+
+# Not at all normal
+p3 %>%
+    filter(class == "Antibiotic") %>%
+    ggplot(aes(x = claims_1k)) +
+    geom_density()
+
+# Shows that from 50-99% of providers per year per drug have zero claims per 1k beneficiaries. So if you're interested in measuring claims per 1k out of all providers with a claim then you really don't want to log because you're dropping tons of data. If, on the other hand, you're interested in claims / 1k out of providers with *antibiotic* claims only, then it might work because you won't have any zeros.
+zeros <- p3 %>%
+    group_by(year, class) %>%
+    summarize(n_prv_zero = sum(claims_1k == 0, na.rm = TRUE),
+              n_prv_nonzero = sum(claims_1k > 0, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(p_zero = n_prv_zero / (n_prv_zero + n_prv_nonzero))
+
+
+# Problem with logging is that you drop all of the zeros, which are potentially informative.
+# p3 %>%
+#     filter(class == "Antibiotic") %>%
+#     ggplot(aes(x = log_claims_1k)) +
+#     geom_density()
+# 
+# # Number of providers in the by-provider data
+# p %>%
+#     select(Prscrbr_NPI) %>%
+#     unique() %>%
+#     nrow()
+
+# Number of providers in the by-provider-and-drug data, who also have an antibiotic claim. For all years we have about half of providers who didn't prescribe an antibiotic. Shouldn't they be included?
+# pd %>%
+#     filter(Antibiotic == 1) %>%
+#     select(Prscrbr_NPI) %>%
+#     unique() %>%
+#     nrow()
+
+# Models of claims_1k ~ year, normal distribution
+year_effects <- map_dfr(drug_classes, function(class) {
+    class_data <- p3 %>%
+        filter(class == !!class)
+    lm(claims_1k ~ year,
+       data = class_data,
+       weights = Tot_Benes) %>%
+    tidy() %>%
+    mutate(class = class)
+}) %>%
+    mutate(
+        `p < 0.05` = if_else(p.value < 0.05, "*", "")) %>%
+    filter(term == "year") %>%
+    arrange(p.value)
+
+# Models of claims_1k ~ year, binomial distribution
+# year_effects_binomial <- map_dfr(drug_classes, function(class) {
+#     class_data <- p2 %>%
+#         filter(class == !!class)
+#     glm(claims_1k ~ year,
+#        data = class_data,
+#        weights = Tot_Benes) %>%
+#     tidy() %>%
+#     mutate(class = class)
+# }) %>%
+#     mutate(
+#         `p < 0.05` = if_else(p.value < 0.05, "*", "")) %>%
+#     filter(term == "year") %>%
+#     arrange(p.value)
+
+# Compute percent change from 2013 to 2019 (negative is decrease)
+change <- map_dfr(drug_classes, function(class) {
+    p3 %>%
+        filter(class == !!class) %>%
+        compute_summary_table(group = "year") %>%
+        dplyr::select(year, class, mean_claims_1k_wt) %>%
+        pivot_wider(names_from = "year", values_from = "mean_claims_1k_wt") %>%
+        mutate(percent_change = -(`2013` - `2019`) / `2013` * 100)
+})
+    
+# Weighted claims per 1k beneficiaries by year, where we're including providers
+# who don't have any associated antibiotic claims, rather than only including
+# those with >= 1 associated anbitiotic claim.
+map_dfr(drug_classes, function(x) {
+    p3 %>%
+        filter(class == x) %>%
+        compute_summary_table(group = "year") %>%
+        select(year, class, mean_claims_1k_wt, se_claims_1k_wt,
+               ci_claims_1k_lower, ci_claims_1k_upper, lower_ci_claims_1k_wt,
+               upper_ci_claims_1k_wt)
+}) %>%
+    left_join(year_effects, by = "class") %>%
+    left_join(change, by = "class") %>%
+    mutate(class2 = case_when(
+        `p < 0.05` == "*" & percent_change > 0 ~ paste0(
+            class, "\n",
+            round(percent_change), "% change\n",
+            "p = ", format(p.value, scientific = TRUE, digits = 3)),
+        `p < 0.05` == "*" & percent_change < 0 ~  paste0(
+            class, "\n",
+            round(percent_change), "% change\n",
+            "p = ", format(p.value, scientific = TRUE, digits = 3)),
+        TRUE ~ class),
+        class2 = fct_relevel(class2, "Other", after = Inf)) %>%
+    ggplot(mapping = aes(x = year, y = mean_claims_1k_wt, color = class2,
+                         group = class2)) +
+    geom_errorbar(aes(ymin = lower_ci_claims_1k_wt,
+                      ymax = upper_ci_claims_1k_wt),
+                  width = 0.2, size = 0.2, color = "gray50") +
+    geom_line() +
+    scale_y_continuous(limits = c(-20, 1000)) +
+    facet_wrap(~ class2, ncol = 4, scales = "free") +
+    labs(x = "Year",
+         y = "Claims\nper 1K\nbeneficiaries",
+         color = "Class") +
+    theme(legend.position = "none")
+
+```
+
+
+### Claims 1k by provider type
+
+- 2019 Antibiotic data.
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# map_dfr(drug_classes, function(x) {
+#     p3 %>%
+#         filter(class == x) %>%
+#         compute_summary_table() %>%
+#         select(
+#             year,
+#         class,
+#         Std_Provider_Type,
+#         mean_claims_1k_wt,
+#         se_claims_1k_wt,
+#         ci_claims_1k_lower,
+#         ci_claims_1k_upper,
+#         lower_ci_claims_1k_wt,
+#         upper_ci_claims_1k_wt
+#     ) }) %>%
+#     ungroup() %>%
+#     ggplot(mapping = aes(x = year, y = mean_claims_1k_wt,
+#                          color = Std_Provider_Type, group = Std_Provider_Type)) +
+#     geom_line() +
+#     facet_wrap(~ Std_Provider_Type)
+        
+p3 %>%
+    filter(class == "Antibiotic", year == 2019) %>%
+    compute_summary_table(group = "Std_Provider_Type") %>%
+    select(
+        class,
+        Std_Provider_Type,
+        mean_claims_1k_wt,
+        se_claims_1k_wt,
+        ci_claims_1k_lower,
+        ci_claims_1k_upper,
+        lower_ci_claims_1k_wt,
+        upper_ci_claims_1k_wt
+    ) %>%
+    ungroup() %>%
+    mutate(Std_Provider_Type = fct_reorder(factor(Std_Provider_Type),
+                                           mean_claims_1k_wt)) %>%
+    ggplot(mapping = aes(x = Std_Provider_Type, y = mean_claims_1k_wt)) +
+    geom_col() +
+    coord_flip()
+
+```
+
+
+### Missingness
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Assess missingness in p2. 83% missing for Std_Provider_Type, but that's because I've only applied it to 2019 data. Bene_Feml_Cnt (and consequently percent_fem) is missing in 26% of the data. Tot_Benes is missing 8.5% of the time. Risk socre is only missing in 1%. RUCA < 1%.
+missing <- p2 %>%
+    summarize_all(~ sum(is.na(.) | is.infinite(.)) / n()) %>%
+    pivot_longer(cols = everything(), names_to = "column",
+                 values_to = "p_missing") %>%
+    arrange(desc(p_missing))
+    
+# Race counts are relatively complete for white (17% missing), but are missing
+# at ~ 50% for all other categories(black, asian, hispanic, native american)
+# missing %>%
+#     filter(str_detect(column, "Race"))
+
+
+# Check p. ~ 25% of Antbtc_Tot_Clms is missing per year. Tot_Benes is missing < 10% of the time per year (impute?), RUCA is missing < 1% per year, always have prescriber type (which means we should be able to get a standardized prescriber type everywehre, prescriber gender is always there. Beneficiary age is always there except for 8% missing in 2017. Beneficiarly female count is missing ~ 25% of the time per year (impute?), Risk score is almost always there, except for 8% missing in 2017. ARE THE 2017 missing for real, or is it a problem with how I'm processing the data?  Race white counts are missing ~ 10% of the time. Other race variables are missing ~ 50% of the time. Bene_Dual_Cnt is missing ~ 40% of the time
+p3 %>%
+    group_by(year) %>%
+    summarize_all(~ sum(is.na(.) | is.infinite(.)) / n()) %>%
+    mutate(across(where(is.double), ~ format(., digits = 2, nsmall = 2))) %>%
+    datatable()
+
+# Realistic opportunities for imputation: Tot_Benes, Female count/percent female. Maybe race white counts?
+
+# Shows that we have no NAs in pd data. This is a bit misleading though, since instead of coding Tot_Clms < 11 as NA, they're just excluded from the dataset. This is probably the main factor that leads to lower claims counts in the pd dataset, and consequently lower claims per 1k beneficiaries when computing using the pd claims counts.
+# pd2 %>%
+#     group_by(year, class) %>%
+#     summarize_all(~ sum(is.na(.)) / n()) %>%
+#     summary()
+```
+
+### Can we get claims per 1k beneficiaries to look normal?
+
+Not really.
+
+Logging gets us close to normal, but with 77% data loss.
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# All of these distributions are entirely non-normal.
+p3 %>%
+    filter(class == "Antibiotic") %>%
+    ggplot(aes(x = claims_1k)) +
+    geom_density()
+
+# Logging improves normality, but you lose massive amounts of data
+p3 %>%
+    filter(class == "Antibiotic") %>%
+    ggplot(aes(x = log_claims_1k)) +
+    geom_density()
+
+# Amount of data you lose when trying to take log(0)
+(p3 %>%
+    filter(log_claims_1k == -Inf) %>%
+    nrow()) / nrow(p3)
+
+# Distribution of log(claims_1k + 1)
+p3 %>%
+    filter(class == "Antibiotic") %>%
+    ggplot(aes(x = log_claims_1k_one)) +
+    geom_density()
+
+# Distribution of log(claims_1k + .5 * minimum nonzero claims_1k)
+p3 %>%
+    filter(class == "Antibiotic") %>%
+    ggplot(aes(x = log_claims_1k_half_min)) +
+    geom_density()
+
+```
+
+### Model tot_claims instead of claims_1k
+
+We're not going to get claims_1k to be normal, so model tot_claims using other methods: Poisson, hurdle negative binomial, zero-inflated negative binomial.
+
+Modeling 2019 antibiotic claims. All models are intercept only.
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 10}
+
+# 2019 antibiiotic claims
+data <- p3 %>%
+    filter(class == "Antibiotic", year == 2019, Tot_Benes != 0,
+           !is.na(Bene_Avg_Risk_Scre))
+data$hcc_c <- data$Bene_Avg_Risk_Scre - mean(data$Bene_Avg_Risk_Scre)
+
+# Distribution shows lots of zeros with long right tail
+data %>%
+    ggplot(aes(x = tot_clms)) +
+    geom_density()
+
+# Distribution of HCC
+# data %>%
+#     ggplot(aes(x = Bene_Avg_Risk_Scre)) +
+#     geom_density()
+
+# Relationship of HCC to tot_clms. Yikes--very non-linear!
+# data %>%
+#     ggplot(aes(x = Bene_Avg_Risk_Scre, y = tot_clms)) +
+#     geom_smooth(method = "lm")
+# data %>%
+#     ggplot(aes(x = Bene_Avg_Risk_Scre, y = tot_clms)) +
+#     geom_smooth() +
+#     scale_x_continuous(breaks = seq(0, 9, 1), limits = c(0, 9))
+
+# Counts modeled as gaussian. Negative?
+m_gaus <- lm(tot_clms ~ offset(log(Tot_Benes)) + 1,
+         data = data)
+summary(m_gaus)
+
+# https://online.stat.psu.edu/stat504/lesson/9/9.3 recommends poisson model with number of beneficiaries as the offset, e.g.
+m_pois <- glm(tot_clms ~ offset(log(Tot_Benes)) + 1,
+         data = data,
+         family = poisson)
+summary(m_pois)
+
+# Quasi-Poisson. Dispersion parameter is > 1, confirming that variance is much larger than the mean (over-dispersion). With over-dispersed data, negative binominal models are recommended.
+m_qpois <- glm(tot_clms ~ offset(log(Tot_Benes)) + 1,
+               data = data,
+               family = quasipoisson)
+summary(m_qpois)
+
+# Negative binomial using MASS::glm.nb
+library(MASS)
+# m_negbin <- glm.nb(tot_clms ~ offset(log(Tot_Benes)) + 1,
+#              data = data)
+# summary(m_negbin)
+
+
+# Hurdle model with counts > 1 negbin
+library(pscl)
+m_hurdle <- pscl::hurdle(tot_clms ~ offset(log(Tot_Benes)) + 1,
+             data = data,
+             dist = "negbin")
+summary(m_hurdle)
+
+# Zero inflated 
+m_zinb <- pscl::zeroinfl(tot_clms ~ offset(log(Tot_Benes)) + 1,
+             data = data,
+             dist = "negbin")
+summary(m_zinb)
+
+# Need to make predictions for each model, visualize, compute rsq
+# Evaluate different levels of hcc at mean Tot_Benes
+# new <- expand_grid(Tot_Benes = mean(data$Tot_Benes), hcc_c = seq(-1, 8, 1))
+
+# Add in predictions from different models
+data$pred_gaus <- predict(m_gaus, newdata = data)
+data$pred_pois <- predict(m_pois, newdata = data)
+data$pred_qpois <- predict(m_qpois, newdata = data)
+data$pred_qpois <- predict(m_qpois, newdata = data)
+# data$pred_negbin <- predict(m_negbin, newdata = data)
+data$pred_hurdle <- predict(m_hurdle, newdata = data)
+data$pred_zinb <- predict(m_zinb, newdata = data)
+
+# Shows that gaussian and poisson tend to put almost all density at lower values.
+data %>%
+    dplyr::select(empirical = tot_clms, Tot_Benes, Bene_Avg_Risk_Scre, hcc_c,
+                  matches("^pred_")) %>%
+    pivot_longer(cols = matches("empirical|^pred_"), names_to = "source",
+                 values_to = "tot_clms") %>%
+    filter(source %in% c("empirical", "pred_gaus", "pred_pois")) %>%
+    ggplot(aes(x = tot_clms, color = source)) +
+    geom_density()
+
+# Shows that hurdle and zero-inflated negative binominal provide much better fits
+data %>%
+    dplyr::select(empirical = tot_clms, Tot_Benes, Bene_Avg_Risk_Scre, hcc_c,
+                  matches("^pred_")) %>%
+    pivot_longer(cols = matches("empirical|^pred_"), names_to = "source",
+                 values_to = "tot_clms") %>%
+    filter(!source %in% c("pred_gaus", "pred_qpois", "pred_pois",
+                          "pred_negbin")) %>%
+    ggplot(aes(x = tot_clms, color = source)) +
+    geom_density()
 
 ```
 
 
 ```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-# Weighted claims per 1k beneficiaries by year, where we're including providers
-# who don't have any associated antibiotic claims, rather than only including
-# those with >= 1 associated anbitiotic claim.
-map_dfr(drug_classes, function(x) {
-    p2 %>%
-        filter(class == x) %>%
-        compute_summary_table(group = "year") %>%
-        select(year, mn_cl_1k_wt) %>%
-        mutate(class = x) %>%
-        ungroup()
-}) %>%
-    mutate(class = fct_relevel(class, "Other", after = Inf)) %>%
-    ggplot(mapping = aes(x = year, y = mn_cl_1k_wt, color = class, group = class)) +
-    geom_line() +
-    scale_y_continuous(limits = c(0, 300)) +
-    facet_wrap(~ class, ncol = 4, scales = "free") +
-    labs(x = "Year",
-         y = "Claims\nper 1K\nbeneficiaries",
-         color = "Class") +
-    theme(legend.position = "none")
+# Predictors without much missing data: Prscrbr_RUCA, Prscrbr_Gndr, Bene_Avg_Age, Bene_Avg_Risk_Scre, Std_Provider_Type
+
+# Use by-providers table. 2019 data only.
+p2019.0 <- p %>% filter(
+    year == 2019)
+
+p2019.1 <- p2019.0 %>%
+    filter(
+    
+    # Drop any rows missing the outcome
+    !is.na(Antbtc_Tot_Clms),
+    
+    # Doing this because there are zeros in Antbtc_Tot_Clms, even though
+    # according to the documentation there shouldn't be. Note that Gouin et al.
+    # (2022) explicitly remove claims < 11.
+    !Antbtc_Tot_Clms < 11)
+
+# Look at missingness
+# < 1% % of rows are missing Tot_Benes. Gouin et al are imputing missing values
+# as 10. 8% of rows are missing Bene_Feml_Cnt. < 1% of rows are missing
+# Bene_Race_Wht_Cnt.
+# p2019.1 %>%
+#     summarize_all(~ sum(is.na(.) | is.infinite(.)) / n()) %>%
+#     mutate(across(where(is.double), ~ format(., digits = 2, nsmall = 2))) %>%
+#     datatable()
+
+# Dataset for modeling
+p2019.2 <- p2019.1 %>%
+    
+    # Impute NA values of Tot_Benes as 10
+    mutate(Tot_Benes = if_else(is.na(Tot_Benes), 10, Tot_Benes),
+           percent_fem = Bene_Feml_Cnt / Tot_Benes,
+           percent_white = Bene_Race_Wht_Cnt / Tot_Benes,
+           
+           # Version where only primary RUCA codes are used (decimals dropped)
+           primary_RUCA = floor(Prscrbr_RUCA),
+          
+           # Version where RUCA is an ordinal factor
+           ord_RUCA = case_when(
+               primary_RUCA == "1" ~ "one",
+               primary_RUCA == "2" ~ "two",
+               primary_RUCA == "4" ~ "four",
+               primary_RUCA == "5" ~ "five",
+               primary_RUCA == "7" ~ "seven",
+               primary_RUCA == "8" ~ "eight",
+               primary_RUCA == "10" ~ "ten"),
+           ord_RUCA = as_factor(ord_RUCA, ordered = FALSE),
+           ord_RUCA = fct_relevel(ord_RUCA, "one", "two", "four", "five",
+                                  "seven", "eight", "ten"),
+           
+           # Rural indicator based on RUCA 4-10
+           rural = if_else(primary_RUCA >= 4, 1L, 0L)) %>%
+    filter(!is.na(Tot_Benes),
+           !is.na(Prscrbr_RUCA),
+           !is.na(Std_Provider_Type),
+           !is.na(percent_fem),
+           !is.na(percent_white))
+
+# No missing values for cols used in modeling
+# p2019.2 %>%
+#     summarize_all(~ sum(is.na(.) | is.infinite(.)) / n()) %>%
+#     mutate(across(where(is.double), ~ format(., digits = 2, nsmall = 2))) %>%
+#     datatable()
+# 
+# # 91% of the data that has the outcome defined is availabile for modeling.
+# nrow(p2019.2) / nrow(p2019.1)
+
+```
+
+```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Pairs plot
+# library(GGally)
+# p2019.2 %>%
+#     select(Antbtc_Tot_Clms:Prscrbr_Gndr, Bene_Avg_Age, Bene_Avg_Risk_Scre,
+#            Std_Provider_Type, percent_fem, percent_white) %>%
+#     select(where(is.numeric)) %>%
+#     ggpairs()
+# 
+# # Hurdle model
+# mh1 <- pscl::hurdle(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+#                         Prscrbr_RUCA +
+#                         Prscrbr_Gndr +
+#                         Bene_Avg_Age +
+#                         Bene_Avg_Risk_Scre +
+#                         Std_Provider_Type +
+#                         percent_fem +
+#                         percent_white,
+#              data = p2019.2,
+#              dist = "negbin")
+# summary(mh1)
+# 
+# 
+# zinb1 <- pscl::zeroinfl(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+#                         Prscrbr_RUCA +
+#                         Prscrbr_Gndr +
+#                         Bene_Avg_Age +
+#                         Bene_Avg_Risk_Scre +
+#                         Std_Provider_Type +
+#                         percent_fem +
+#                         percent_white,
+#              data = p2019.2,
+#              dist = "negbin")
+# summary(zinb1)
+
+# Poisson
+pois1 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Age +
+                        Bene_Avg_Risk_Scre +
+                        Std_Provider_Type +
+                        percent_fem +
+                        percent_white,
+             data = p2019.2,
+             family = poisson)
+summary(pois1)
+
+# Intercept-only qpois model
+qpois0 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1,
+             data = p2019.2,
+             family = quasipoisson)
+
+# Quasi-poisson to get dispersion parameter. Indicates over-dispersion
+qpois1 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Age +
+                        Bene_Avg_Risk_Scre +
+                        Std_Provider_Type +
+                        percent_fem +
+                        percent_white,
+             data = p2019.2,
+             family = quasipoisson)
+summary(qpois1)
+anova(qpois1, test = "Chisq")
+
+# Negative binomial
+nb1 <- glm.nb(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Age +
+                        Bene_Avg_Risk_Scre +
+                        Std_Provider_Type +
+                        percent_fem +
+                        percent_white,
+             data = p2019.2)
+summary(nb1)
+
+# Add fitted to visualize fit to empirical
+p2019.2$pred_pois <- fitted(pois1)
+p2019.2$pred_qpois0 <- fitted(qpois0)
+p2019.2$pred_qpois1 <- fitted(qpois1)
+p2019.2$pred_nb <- fitted(nb1)
+
+# Visualize distribution of claims for empirical and models. Poisson is
+# overplotted by quasipoisson--they have the same parameter values. But SEs are
+# larger for quasi, which is supposed to be good, I think. Both quasipoisson and
+# nb look like pretty good fits, with quasi maybe being a tad better. SEs larger for quasi versus nb. Significance is the same for quasi vs. nb. Parameter values are all similar.
+p2019.2 %>%
+    dplyr::select(empirical = Antbtc_Tot_Clms, matches("^pred_")) %>%
+    pivot_longer(cols = matches("empirical|^pred_"), names_to = "source",
+                 values_to = "tot_clms") %>%
+    ggplot(aes(x = tot_clms, color = source)) +
+    geom_density()
+
+# Model fit isn't statistically different without age
+qpois2 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        Std_Provider_Type +
+                        percent_fem +
+                        percent_white,
+             data = p2019.2,
+             family = quasipoisson)
+summary(qpois2)
+anova(qpois1, qpois2, test = "Chisq")
+
+# Model fit is statistically worse without risk score
+qpois3 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        Prscrbr_Gndr +
+                        Std_Provider_Type +
+                        percent_fem +
+                        percent_white,
+             data = p2019.2,
+             family = quasipoisson)
+anova(qpois2, qpois3, test = "Chisq")
+
+# Model fit is marginally worse (p = 0.12) without percent_fem
+qpois4 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        Std_Provider_Type +
+                        percent_white,
+             data = p2019.2,
+             family = quasipoisson)
+summary(qpois4)
+anova(qpois2, qpois4, test = "Chisq")
+
+# Model fit is statistically worse without percent_white
+qpois5 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        Std_Provider_Type +
+                        percent_fem,
+             data = p2019.2,
+             family = quasipoisson)
+summary(qpois5)
+anova(qpois2, qpois5, test = "Chisq")
+
+# See if I can improve model by transforming predictors
+# Visualize RUCA. Versions with secondary codes (Prscrbr_RUCA), and without
+# secondary codes (primary_RUCA) are nearly identical. Both figures suggest
+# model could be improved by adding a squared term for RUCA.
+p2019.2 %>%
+    ggplot(aes(x = Prscrbr_RUCA, y = Antbtc_Tot_Clms)) +
+    geom_smooth(method = "loess", span = 4)
+p2019.2 %>%
+    ggplot(aes(x = primary_RUCA, y = Antbtc_Tot_Clms)) +
+    geom_smooth(method = "loess", span = 4)
+p2019.2 %>%
+    ggplot(aes(x = factor(primary_RUCA), y = Antbtc_Tot_Clms)) +
+    stat_summary(geom = "pointrange")
+p2019.2 %>%
+    ggplot(aes(x = factor(rural), y = Antbtc_Tot_Clms)) +
+    geom_boxplot()
+
+# Model fit is statistically better with squared Prscrbr_RUCA
+qpois6 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        I(Prscrbr_RUCA^2) +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        Std_Provider_Type +
+                        percent_fem +
+                        percent_white,
+             data = p2019.2,
+             family = quasipoisson)
+summary(qpois6)
+anova(qpois2, qpois6, test = "Chisq")
+
+# Visualize claims ~ risk score. Weird nonlinearity. Suggests trying at least a squared term
+p2019.2 %>%
+    ggplot(aes(x = Bene_Avg_Risk_Scre, y = Antbtc_Tot_Clms)) +
+    geom_smooth()
+
+# Model fit is statistically the same with squared risk score
+qpois7 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        I(Prscrbr_RUCA^2) +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        percent_white,
+             data = p2019.2,
+             family = quasipoisson)
+summary(qpois7)
+anova(qpois6, qpois7, test = "Chisq")
+
+# Model fit is statistically better with squared and cubed risk score versus
+# only linear risk score.
+qpois8 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        I(Prscrbr_RUCA^2) +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        I(Bene_Avg_Risk_Scre^3) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        percent_white,
+             data = p2019.2,
+             family = quasipoisson)
+summary(qpois8)
+anova(qpois6, qpois8, test = "Chisq")
+
+# Visualize claims ~ percent fem. Generally as the percentage of female beneficiaires gets higher, claims gets lower. Suggests a squared term might help.
+p2019.2 %>%
+    ggplot(aes(x = percent_fem, y = Antbtc_Tot_Clms)) +
+    geom_smooth()
+
+# Model fit is statistically better with squared percent female.
+# *** Best model so far ***
+qpois9 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        primary_RUCA +
+                        I(primary_RUCA^2) +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        I(Bene_Avg_Risk_Scre^3) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        I(percent_fem^2) +
+                        percent_white,
+             data = p2019.2,
+             family = quasipoisson)
+summary(qpois9)
+anova(qpois8, qpois9, test = "Chisq")
+p2019.2$pred_qpois9 <- fitted(qpois9)
+
+# Visualize claims ~ percent white. Shows some weird nonlinearities
+p2019.2 %>%
+    ggplot(aes(x = percent_white, y = Antbtc_Tot_Clms)) +
+    geom_smooth(method = "lm")
+
+# Model fit is statistically the same with percent white squared
+qpois10 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        I(Prscrbr_RUCA^2) +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        I(Bene_Avg_Risk_Scre^3) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        I(percent_fem^2) +
+                        percent_white +
+                        I(percent_white^2),
+             data = p2019.2,
+             family = quasipoisson)
+summary(qpois10)
+anova(qpois9, qpois10, test = "Chisq")
+
+# Model fit is statistically the same for squared and cubed percent white versus linear only.
+qpois11 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        I(Prscrbr_RUCA^2) +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        I(Bene_Avg_Risk_Scre^3) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        I(percent_fem^2) +
+                        percent_white +
+                        I(percent_white^2) +
+                        I(percent_white^3),
+             data = p2019.2,
+             family = quasipoisson)
+summary(qpois11)
+anova(qpois9, qpois11, test = "Chisq")
+
+# Visualize claims densities for empirical verus qpois1 versus qpois9. qpois 1
+# and 9 are very similar.
+p2019.2 %>%
+    dplyr::select(empirical = Antbtc_Tot_Clms, matches("^pred_")) %>%
+    pivot_longer(cols = matches("empirical|^pred_"), names_to = "source",
+                 values_to = "tot_clms") %>%
+    filter(source %in% c("empirical", "pred_qpois0", "pred_qpois9")) %>%
+    ggplot(aes(x = tot_clms, color = source)) +
+    geom_density()
+
+# R-squared for qpois0 versus qpois9. Shows ~ 7% gain from 0 to 9
+cor(p2019.2$Antbtc_Tot_Clms, p2019.2$pred_qpois0)^2
+cor(p2019.2$Antbtc_Tot_Clms, p2019.2$pred_qpois9)^2
+
+# Fit a negative binomial equivalent to qpois9 and check r-squared. Shows r2 = 0.36, lower than r2 = 0.39 for qpois9.
+nb9 <- glm.nb(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        I(Prscrbr_RUCA^2) +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        I(Bene_Avg_Risk_Scre^3) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        I(percent_fem^2) +
+                        percent_white,
+             data = p2019.2)
+summary(nb9)
+p2019.2$pred_nb9 <- fitted(nb9)
+cor(p2019.2$Antbtc_Tot_Clms, p2019.2$pred_nb9)^2
+
+# Version of qpois9 where secondary RUCA codes are dropped
+qpois9.1 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        primary_RUCA +
+                        I(primary_RUCA^2) +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        I(Bene_Avg_Risk_Scre^3) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        I(percent_fem^2) +
+                        percent_white,
+             data = p2019.2,
+             family = quasipoisson)
+summary(qpois9.1)
+p2019.2$pred_qpois9.1 <- fitted(qpois9.1)
+
+# Version without secondary RUCA codes has r-squared of 0.3852--slightly lower
+# than the version with secondary rUCA codes--0.3853. So I think we simplify by
+# using only the primary codes in primary_RUCA (qpois9.1).
+cor(p2019.2$Antbtc_Tot_Clms, p2019.2$pred_qpois9.1)^2
+
+# Version of qpois9 where dummy rural is used. This won't be able to capture the
+# curvilinear relationship between RUCA and claims, so probably won't fit as
+# well.
+qpois9.2 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        rural + 
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        I(Bene_Avg_Risk_Scre^3) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        I(percent_fem^2) +
+                        percent_white,
+             data = p2019.2,
+             family = quasipoisson)
+summary(qpois9.2)
+p2019.2$pred_qpois9.2 <- fitted(qpois9.2)
+
+# As expected, r-squared is slightly lower for a version of model 9 with rural versus primary_RUCA. 
+cor(p2019.2$Antbtc_Tot_Clms, p2019.2$pred_qpois9.2)^2
+
+# Version of qpois9 with RUCA as ordered factor. Coefficient names for ord_RUCA
+# don't display correctly when it's an ordered factor. But fine when not
+# ordered.
+qpois9.3 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        ord_RUCA + 
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        I(Bene_Avg_Risk_Scre^3) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        I(percent_fem^2) +
+                        percent_white,
+             data = p2019.2,
+             family = quasipoisson)
+summary(qpois9.3)
+p2019.2$pred_qpois9.3 <- fitted(qpois9.3)
+
+# Slightly higher r-squared with factor RUCA, but only by 0.002
+cor(p2019.2$Antbtc_Tot_Clms, p2019.2$pred_qpois9.3)^2
+```
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Fit models
+lm9 <- lm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        primary_RUCA +
+                        I(primary_RUCA^2) +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        I(Bene_Avg_Risk_Scre^3) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        I(percent_fem^2) +
+                        percent_white,
+             data = p2019.2)
+qpois9 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        primary_RUCA +
+                        I(primary_RUCA^2) +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        I(Bene_Avg_Risk_Scre^3) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        I(percent_fem^2) +
+                        percent_white,
+             data = p2019.2,
+             family = quasipoisson)
+nb9 <- glm.nb(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        primary_RUCA +
+                        I(primary_RUCA^2) +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        I(Bene_Avg_Risk_Scre^3) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        I(percent_fem^2) +
+                        percent_white,
+             data = p2019.2)
+
+# Extract fitted values & residuals. For GLM, use type = "pearson" to take into
+# account increasing variance with increasing mean (see
+# https://stats.stackexchange.com/questions/99052/residuals-in-poisson-regression)
+p2019.2$pred_lm9 <- fitted(lm9)
+p2019.2$resid_lm9 <- residuals(lm9)
+p2019.2$pred_qpois9 <- fitted(qpois9)
+p2019.2$resid_qpois9 <- residuals.glm(qpois9, type = "pearson")
+p2019.2$pred_nb9 <- fitted(nb9)
+p2019.2$resid_nb9 <- residuals.glm(nb9, type = "pearson")
+
+
+```
+
+### Models of antibiotic claims for 2019
+
+Data:
+
+- Number of rows in the 2019 by-providers dataset: `r format(nrow(p2019.0), big.mark = ",")`.
+- Number of rows with valid outcome values---i.e., values of Antbtc_Tot_Clms >= 11: `r format(nrow(p2019.1), big.mark = ",")`.
+- Proportion of rows with valid outcome values available for modeling after excluding NAs in predictors: `r format(round(nrow(p2019.2) / nrow(p2019.1), digits = 2), big.mark = ",")`.
+- Predictors included: Prscrbr_RUCA (rurality indicator with secondary codes dropped), Prscrbr_Gndr, Bene_Avg_Risk_Scre, Std_Provider_Type, percent_fem, percent_white.
+
+
+These figures show r-squared for each model:
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 10}
+
+# Observed versus predicted for gaussian model
+p2019.2 %>%
+    ggplot(aes(x = Antbtc_Tot_Clms, y = pred_lm9)) +
+    geom_point(alpha = 0.1) +
+    geom_abline(intercept = 0, slope = 1, color = "blue", size = 0.2) +
+    scale_x_continuous(limits = c(-50, 1000)) +
+    scale_y_continuous(limits = c(-50, 1000)) +
+    labs(title = "Observed versus predicted antibiotic claims from a gaussian model",
+         subtitle = paste(
+             "R-squared =",
+             round(cor(p2019.2$Antbtc_Tot_Clms, p2019.2$pred_lm9)^2,
+                   digits = 2)))
+
+# Observed versus predicted for quasipoisson
+p2019.2 %>%
+    ggplot(aes(x = Antbtc_Tot_Clms, y = pred_qpois9)) +
+    geom_point(alpha = 0.1) +
+    geom_abline(intercept = 0, slope = 1, color = "blue", size = 0.2) +
+    scale_x_continuous(limits = c(-50, 1000)) +
+    scale_y_continuous(limits = c(-50, 1000)) +
+    labs(title = "Observed versus predicted antibiotic claims from a quasipoisson model",
+         subtitle = paste(
+             "R-squared =",
+             round(cor(p2019.2$Antbtc_Tot_Clms, p2019.2$pred_qpois9)^2,
+                   digits = 2)))
+
+# Observed versus predicted for negative binomial
+p2019.2 %>%
+    ggplot(aes(x = Antbtc_Tot_Clms, y = pred_nb9)) +
+    geom_point(alpha = 0.1) +
+    geom_abline(intercept = 0, slope = 1, color = "blue", size = 0.2) +
+    scale_x_continuous(limits = c(-50, 1000)) +
+    scale_y_continuous(limits = c(-50, 1000)) +
+    labs(title = "Observed versus predicted antibiotic claims from a negative binomial model",
+         subtitle = paste(
+             "R-squared =",
+             round(cor(p2019.2$Antbtc_Tot_Clms, p2019.2$pred_nb9)^2,
+                   digits = 2)))
+
+```
+
+### Residuals for each model
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+p2019.2 %>%
+    select(fitted = pred_lm9, residual = resid_lm9) %>%
+    ggplot(aes(x = fitted, y = residual)) +
+    geom_point(alpha = 0.2) +
+    labs(title = "Distribution of residuals in a gaussian model")
+
+p2019.2 %>%
+    select(fitted = pred_qpois9, residual = resid_qpois9) %>%
+    ggplot(aes(x = fitted, y = residual)) +
+    geom_point(alpha = 0.2) +
+    labs(title = "Distribution of residuals in a quasipoisson model")
+
+p2019.2 %>%
+    select(fitted = pred_nb9, residual = resid_nb9) %>%
+    ggplot(aes(x = fitted, y = residual)) +
+    geom_point(alpha = 0.2) +
+    labs(title = "Distribution of residuals in a negative binomial model")
+
+# Number of rows where provider type == general medicine
+general_n <- p2019.2 %>%
+    filter(Std_Provider_Type == "General Medicine") %>%
+    nrow()
+
+```
+
+```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Compute O/E ratios. Larger ratios mean we're underpredicting antibiotic counts. Smaller ratios mean we're overpredicting antibiotic counts. Karl's figure in PPT has zero as the midpoint rather than 1. More like log-odds.
+# Note that I'm computing counts of observed / counts of expected. This should be the same as rates of observed / rates of expected (e.g., counts per 1K beneficiaries), because the number of beneficiaries will be the same and will cancel out. Might consider a weighted mean though when I summarize by county...
+p2019.2 <- p2019.2 %>%
+    mutate(oe_ratio = Antbtc_Tot_Clms / pred_qpois9,
+           log_oe_ratio = log(oe_ratio))
+
+# Visualize OE ratio
+p2019.2 %>%
+    mutate(Prscrbr_NPI = fct_reorder(Prscrbr_NPI, oe_ratio)) %>%
+    ggplot(aes(x = Prscrbr_NPI, y = oe_ratio)) +
+    geom_col()
+
+# Visualize log(OE ratio). Providers with positive log(OE ratio) have higher
+# empirical claims relative to model predictions.
+p2019.2 %>%
+    mutate(Prscrbr_NPI = fct_reorder(Prscrbr_NPI, log_oe_ratio)) %>%
+    ggplot(aes(x = Prscrbr_NPI, y = log_oe_ratio)) +
+    geom_col() +
+    theme(panel.grid.major.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank()) +
+    labs(title = "Log(observed/expected) antibiotic counts",
+         subtitle = "2019 Idaho by-provider data, N = 3,321")
+
+# Use tigris to get shapes of zip codes
+library(tigris)
+
+# Have a couple of zips starting with "60". Are those in Idaho? Check. All
+# others start with "83".
+idaho_zips <- p2019.2 %>%
+    select(zip = Prscrbr_Zip5) %>%
+    unique()
+
+# Retrieve shapfiles for all zip codes starting with "83
+zips_sf <- zctas(cb = TRUE, starts_with = "83", year = "2019",
+                 class = "sf") %>%
+    select(zip = ZCTA5CE10, geometry)
+
+# Filter to just the ones we want
+zips_sf <- zips_sf %>%
+    inner_join(idaho_zips, by = "zip")
+
+
+
+# Compute mean log_oe by county
+county_OEs <- p2019.2 %>%
+    group_by(county) %>%
+    summarize(mean = mean(log_oe_ratio, na.rm = TRUE), .groups = "drop") %>%
+    arrange(desc(mean))
+
+
+# Shapes for Idaho counties
+counties_sf <- counties(state = "ID", cb = FALSE) %>%
+    left_join(county_OEs %>%
+                  rename(NAMELSAD = county),
+              by = "NAMELSAD") %>%
+    mutate(NAME = str_wrap(NAME, 5))
+
+
+plot(counties_sf)
+
+
+
+# Requires that Google Maps Static API is enabled
+library(ggmap)
+library(ggrepel)
+register_google(key = api_key)
+
+# Idaho bounding box (left, bottom, right, top)
+id_box <- c(left = -117.5, bottom = 41.7, right = -110.5, top = 49.2)
+
+# For some reason I'm only able to get the stamen terrain map
+basemap <- get_map(id_box, source = "stamen", maptype = "toner-lite")
+
+    
+# This looks pretty good.
+# Missing data for Clark & Lewis counties
+counties_sf %>%
+    ggplot(aes(fill = mean, label = NAME)) +
+    geom_sf() +
+    geom_sf_text(size = 3) +
+    scale_fill_continuous(name = "Log(Observed/Expected)",
+                          type = "viridis") +
+    theme(axis.line = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid.major = element_blank()) +
+    labs(title = "2019 Medicare Part D antibiotic claims",
+         subtitle = str_wrap("Lighter colors represents more claims than expected after taking into account provider type, gender, rurality, and beneficiary age, health status, proportion of females, and proportion of caucasians.", 100))
     
 
 
+# Look at getting data for missing counties
+
+# Some kind of writeup for Karl. Include residuals from lm versus quasipoisson.
 
 
-# DO MODELS OF claims_1k ~ year
+
+.
+p2019.2$resid_qpois9 <- residuals(qpois9, type = "pearson")[]
+
+# Roughly normally distributed, but with a long right tail
+p2019.2 %>%
+    ggplot(aes(x = resid_qpois9)) +
+    geom_density()
+
+# Residuals versus fitted. Looks like more variance in residuals as fitted
+# increase (fan shape).
+p2019.2 %>%
+    select(fitted = pred_qpois9, residual = resid_qpois9) %>%
+    ggplot(aes(x = fitted, y = residual)) +
+    geom_point(alpha = 0.2)
+
+# QQ plot
+qqnorm(p2019.2$resid_qpois9)
+qqline(p2019.2$resid_qpois9)
+
+# What do residuals look like for negative binomial?. Distribution has mode < 0
+# and shorter tail. Less fan-like, more funnel-like. Worse qq-plot.
+p2019.2$resid_nb9 <- residuals(nb9, type = "pearson")
+p2019.2 %>%
+    ggplot(aes(x = resid_nb9)) +
+    geom_density()
+p2019.2 %>%
+    select(fitted = pred_nb9, residual = resid_nb9) %>%
+    ggplot(aes(x = fitted, y = residual)) +
+    geom_point(alpha = 0.2)
+qqnorm(p2019.2$resid_nb9)
+qqline(p2019.2$resid_nb9)
+
+# What do residuals look like for a gaussian model?. Distribution of residuals
+# seems to have a mode < 0 and very long tail. Definite fan shape, quite a bit more likely to miss low than high. High values
+# off by hundreds in QQ plot.
+lm9 <- lm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+                        Prscrbr_RUCA +
+                        I(Prscrbr_RUCA^2) +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        I(Bene_Avg_Risk_Scre^3) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        I(percent_fem^2) +
+                        percent_white,
+             data = p2019.2)
+summary(lm9)
+p2019.2$pred_lm9 <- fitted(lm9)
+p2019.2$resid_lm9 <- residuals(lm9)
+p2019.2 %>%
+    ggplot(aes(x = resid_lm9)) +
+    geom_density()
+p2019.2 %>%
+    select(fitted = pred_lm9, residual = resid_lm9) %>%
+    ggplot(aes(x = fitted, y = residual)) +
+    geom_point(alpha = 0.2)
+qqnorm(p2019.2$resid_lm9)
+qqline(p2019.2$resid_lm9)
+
+
+
+
+
+
+
+
+# If we're really dropping all 0 claims then the strengths of the hurdle and zeroinfl models aren't needed as much. Neither model will even work without zeros in the data--throw errors complaining that minimum count isn't zero. For Antbtc_Tot_Clms we can't really get to zero, since the zeros that are in there are kind of suspect.
+
+# So go back to poisson, quasi-poisson, and negative binomial
+
+
+library(ISwR)
+library(dplyr)
+data(eba1977)
+eba1977 = eba1977 %>% mutate(lpop = log(pop))
+model1 = glm(cases ~ city + age, offset=lpop, family=poisson, data=eba1977)
+summary(model1)
+anova(model1, test='Chisq')
+anova(model1)
+
+eba1977 = eba1977 %>% mutate(
+ age.mid = rep(c(47,57,62,67,72,75), each=4),
+ e.rate = cases/pop)
+ggplot(eba1977, aes(x=age.mid, y=e.rate, color=city)) + 
+ geom_point() + geom_smooth(method='lm', se=FALSE)
+model = glm(cases ~ city + age.mid, offset=lpop, family=poisson, data=eba1977)
+summary(model)
+anova(model, test='Chisq')
 
 
 
 
 ```
-
