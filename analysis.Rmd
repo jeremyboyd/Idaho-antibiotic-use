@@ -1,15 +1,21 @@
 ---
 title: "Idaho antibiotic use"
-author: "Jeremy Boyd"
-date: "`r Sys.Date()`"
-output: html_document
+author:
+    - Jeremy Boyd, Ph.D.
+    - jeremyboyd@pm.me
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+    html_document:
+        theme: spacelab
+        toc: true
+        toc_float: true
 ---
 
 ```{r setup, include = FALSE}
-# knitr::opts_chunk$set(echo = TRUE)
 
 # Make default image type SVG
 knitr::opts_chunk$set(dev = "svg")
+
 ```
 
 ```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
@@ -862,9 +868,9 @@ p3 %>%
 ```
 
 
-### Missingness
+```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+### Missingness
 
 # Assess missingness in p2. 83% missing for Std_Provider_Type, but that's because I've only applied it to 2019 data. Bene_Feml_Cnt (and consequently percent_fem) is missing in 26% of the data. Tot_Benes is missing 8.5% of the time. Risk socre is only missing in 1%. RUCA < 1%.
 missing <- p2 %>%
@@ -895,13 +901,15 @@ p3 %>%
 #     summary()
 ```
 
+
+```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
 ### Can we get claims per 1k beneficiaries to look normal?
 
-Not really.
+# Not really.
+# 
+# Logging gets us close to normal, but with 77% data loss.
 
-Logging gets us close to normal, but with 77% data loss.
-
-```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # All of these distributions are entirely non-normal.
 p3 %>%
@@ -934,13 +942,14 @@ p3 %>%
 
 ```
 
+
+```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 10}
+
 ### Model tot_claims instead of claims_1k
 
-We're not going to get claims_1k to be normal, so model tot_claims using other methods: Poisson, hurdle negative binomial, zero-inflated negative binomial.
-
-Modeling 2019 antibiotic claims. All models are intercept only.
-
-```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 10}
+# We're not going to get claims_1k to be normal, so model tot_claims using other methods: Poisson, hurdle negative binomial, zero-inflated negative binomial.
+# 
+# Modeling 2019 antibiotic claims. All models are intercept only.
 
 # 2019 antibiiotic claims
 data <- p3 %>%
@@ -1041,7 +1050,7 @@ data %>%
 ```
 
 
-```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # Predictors without much missing data: Prscrbr_RUCA, Prscrbr_Gndr, Bene_Avg_Age, Bene_Avg_Risk_Scre, Std_Provider_Type
 
@@ -1076,6 +1085,7 @@ p2019.2 <- p2019.1 %>%
     mutate(Tot_Benes = if_else(is.na(Tot_Benes), 10, Tot_Benes),
            percent_fem = Bene_Feml_Cnt / Tot_Benes,
            percent_white = Bene_Race_Wht_Cnt / Tot_Benes,
+           log_antbtc_clms = log(Antbtc_Tot_Clms),
            
            # Version where only primary RUCA codes are used (decimals dropped)
            primary_RUCA = floor(Prscrbr_RUCA),
@@ -1095,6 +1105,8 @@ p2019.2 <- p2019.1 %>%
            
            # Rural indicator based on RUCA 4-10
            rural = if_else(primary_RUCA >= 4, 1L, 0L)) %>%
+    
+    # Drop NAs in any of these cols
     filter(!is.na(Tot_Benes),
            !is.na(Prscrbr_RUCA),
            !is.na(Std_Provider_Type),
@@ -1102,13 +1114,23 @@ p2019.2 <- p2019.1 %>%
            !is.na(percent_white))
 
 # No missing values for cols used in modeling
-# p2019.2 %>%
-#     summarize_all(~ sum(is.na(.) | is.infinite(.)) / n()) %>%
-#     mutate(across(where(is.double), ~ format(., digits = 2, nsmall = 2))) %>%
-#     datatable()
-# 
-# # 91% of the data that has the outcome defined is availabile for modeling.
-# nrow(p2019.2) / nrow(p2019.1)
+p2019.2 %>%
+    summarize_all(~ sum(is.na(.)) / n()) %>%
+    mutate(across(where(is.double), ~ format(., digits = 2, nsmall = 2))) %>%
+    pivot_longer(cols = everything(), names_to = "variable",
+                 values_to = "p_NA") %>%
+    datatable()
+
+# 91% of the data that has the outcome defined is availabile for modeling.
+nrow(p2019.2) / nrow(p2019.1)
+
+# Distributions of antibiotic claims
+p2019.2 %>%
+    ggplot(aes(x = Antbtc_Tot_Clms)) +
+    geom_density()
+p2019.2 %>%
+    ggplot(aes(x = log_antbtc_clms)) +
+    geom_density()
 
 ```
 
@@ -1487,7 +1509,7 @@ p2019.2$pred_qpois9.3 <- fitted(qpois9.3)
 cor(p2019.2$Antbtc_Tot_Clms, p2019.2$pred_qpois9.3)^2
 ```
 
-```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # Fit models
 lm9 <- lm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
@@ -1502,7 +1524,21 @@ lm9 <- lm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
                         I(percent_fem^2) +
                         percent_white,
              data = p2019.2)
-qpois9 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+lm9.1 <- lm(log_antbtc_clms ~ offset(log(Tot_Benes)) + 1 +
+                        primary_RUCA +
+                        I(primary_RUCA^2) +
+                        Prscrbr_Gndr +
+                        Bene_Avg_Risk_Scre +
+                        I(Bene_Avg_Risk_Scre^2) +
+                        I(Bene_Avg_Risk_Scre^3) +
+                        Std_Provider_Type +
+                        percent_fem +
+                        I(percent_fem^2) +
+                        percent_white,
+             data = p2019.2)
+qpois9 <- glm(
+    Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
+    # Antbtc_Tot_Clms ~ log(Tot_Benes) + 1 +
                         primary_RUCA +
                         I(primary_RUCA^2) +
                         Prscrbr_Gndr +
@@ -1533,6 +1569,8 @@ nb9 <- glm.nb(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
 # https://stats.stackexchange.com/questions/99052/residuals-in-poisson-regression)
 p2019.2$pred_lm9 <- fitted(lm9)
 p2019.2$resid_lm9 <- residuals(lm9)
+p2019.2$pred_lm9.1 <- fitted(lm9.1)
+p2019.2$resid_lm9.1 <- residuals(lm9.1)
 p2019.2$pred_qpois9 <- fitted(qpois9)
 p2019.2$resid_qpois9 <- residuals.glm(qpois9, type = "pearson")
 p2019.2$pred_nb9 <- fitted(nb9)
@@ -1541,19 +1579,20 @@ p2019.2$resid_nb9 <- residuals.glm(nb9, type = "pearson")
 
 ```
 
+
+```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 10}
+
 ### Models of antibiotic claims for 2019
 
-Data:
+# Data:
+# 
+# - Number of rows in the 2019 by-providers dataset: `r format(nrow(p2019.0), big.mark = ",")`.
+# - Number of rows with valid outcome values---i.e., values of Antbtc_Tot_Clms >= 11: `r format(nrow(p2019.1), big.mark = ",")`.
+# - Proportion of rows with valid outcome values available for modeling after excluding NAs in predictors: `r format(round(nrow(p2019.2) / nrow(p2019.1), digits = 2), big.mark = ",")`.
+# - Predictors included: Prscrbr_RUCA (rurality indicator with secondary codes dropped), Prscrbr_Gndr, Bene_Avg_Risk_Scre, Std_Provider_Type, percent_fem, percent_white.
+# 
+# These figures show r-squared for each model:
 
-- Number of rows in the 2019 by-providers dataset: `r format(nrow(p2019.0), big.mark = ",")`.
-- Number of rows with valid outcome values---i.e., values of Antbtc_Tot_Clms >= 11: `r format(nrow(p2019.1), big.mark = ",")`.
-- Proportion of rows with valid outcome values available for modeling after excluding NAs in predictors: `r format(round(nrow(p2019.2) / nrow(p2019.1), digits = 2), big.mark = ",")`.
-- Predictors included: Prscrbr_RUCA (rurality indicator with secondary codes dropped), Prscrbr_Gndr, Bene_Avg_Risk_Scre, Std_Provider_Type, percent_fem, percent_white.
-
-
-These figures show r-squared for each model:
-
-```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 10}
 
 # Observed versus predicted for gaussian model
 p2019.2 %>%
@@ -1566,6 +1605,17 @@ p2019.2 %>%
          subtitle = paste(
              "R-squared =",
              round(cor(p2019.2$Antbtc_Tot_Clms, p2019.2$pred_lm9)^2,
+                   digits = 2)))
+
+# Observed versus predicted for a gaussian model of log(Antbtc_Tot_Clms)
+p2019.2 %>%
+    ggplot(aes(x = log_antbtc_clms, y = pred_lm9.1)) +
+    geom_point(alpha = 0.1) +
+    geom_abline(intercept = 0, slope = 1, color = "blue", size = 0.2) +
+    labs(title = "Observed versus predicted log(antibiotic claims) from a gaussian model",
+         subtitle = paste(
+             "R-squared =",
+             round(cor(p2019.2$log_antbtc_clms, p2019.2$pred_lm9.1)^2,
                    digits = 2)))
 
 # Observed versus predicted for quasipoisson
@@ -1596,15 +1646,22 @@ p2019.2 %>%
 
 ```
 
-### Residuals for each model
 
-```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+### Residuals for each model
 
 p2019.2 %>%
     select(fitted = pred_lm9, residual = resid_lm9) %>%
     ggplot(aes(x = fitted, y = residual)) +
     geom_point(alpha = 0.2) +
     labs(title = "Distribution of residuals in a gaussian model")
+
+p2019.2 %>%
+    select(fitted = pred_lm9.1, residual = resid_lm9.1) %>%
+    ggplot(aes(x = fitted, y = residual)) +
+    geom_point(alpha = 0.2) +
+    labs(title = "Distribution of residuals in a gaussian model of log(antbc_clms)")
 
 p2019.2 %>%
     select(fitted = pred_qpois9, residual = resid_qpois9) %>%
@@ -1625,42 +1682,186 @@ general_n <- p2019.2 %>%
 
 ```
 
+<br>
+
+***
+
+# Models
+## Details
+
+- All data in this section are from the [Medicare Part D Prescribers by Provider dataset](https://data.cms.gov/provider-summary-by-type-of-service/medicare-part-d-prescribers/medicare-part-d-prescribers-by-provider).
+- The outcome variable, log(Antbtc_Tot_Clms), was modeled as normally-distributed. All values of Antbtc_Tot_Clms < 11 were excluded.
+- Predictors were log(Tot_Benes), primary_RUCA, Prscrbr_Gndr, Bene_Avg_Risk_Scre, percent_fem, and percent_white.
+- Missing values of Tot_Benes were imputed as 10.
+- primary_RUCA is Prscrbr_RUCA with all secondary codes stripped--e.g., 4.1 becomes 4.
+
+<br>
+
+***
+
+## 2019 fits by provider type
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# 2019 dataset
+p2019 <- p %>%
+    mutate(Tot_Benes = if_else(is.na(Tot_Benes), 10, Tot_Benes),
+           percent_fem = Bene_Feml_Cnt / Tot_Benes,
+           percent_white = Bene_Race_Wht_Cnt / Tot_Benes,
+           primary_RUCA = floor(Prscrbr_RUCA)) %>%
+    filter(year == 2019,
+           !is.na(Antbtc_Tot_Clms),
+           !Antbtc_Tot_Clms < 11,
+           !is.na(Tot_Benes),
+           !is.na(primary_RUCA),
+           !is.na(Prscrbr_Gndr),
+           !is.na(Bene_Avg_Risk_Scre),
+           !is.na(percent_fem),
+           !is.na(percent_white)) 
+
+# 2019 provider types with at leaset 100 rows
+provider_types <- p2019 %>%
+    count(Std_Provider_Type) %>%
+    arrange(desc(n)) %>%
+    filter(row_number() %in% 1:7) %>%
+    pull(Std_Provider_Type)
+
+# Models of 2019 data by provider type
+by_type_2019 <- map(provider_types, function(type) {
+    data <- p2019 %>%
+        filter(Std_Provider_Type == type)
+    year <- unique(data$year)
+    fit <- lm(
+        log(Antbtc_Tot_Clms) ~ 1 +
+            log(Tot_Benes) +
+            primary_RUCA +
+            Prscrbr_Gndr +
+            Bene_Avg_Risk_Scre +
+            percent_fem +
+            percent_white,
+        data = data)
+    observed <- log(data$Antbtc_Tot_Clms)
+    fitted <- fitted(fit)
+    max_axis <- max(c(observed, fitted))
+    min_axis <- min(c(observed, fitted))
+    residual <-  residuals(fit)
+    rsq <- round(summary(fit)$r.squared, digits = 2)
+    resid_plot <- bind_cols(fitted, residual) %>%
+        ggplot(aes(x = fitted, y = residual)) +
+        geom_point(alpha = 0.2) +
+        labs(title = paste(year, type),
+             subtitle = paste0("N = ", nrow(data), ", r-squared = ", rsq),
+             x = "Fitted log(Antbtc_Tot_Clms)",
+             y = "Residual\nlog(Antbtc_Tot_Clms)")
+    fit_plot <- bind_cols(observed, fitted) %>%
+        ggplot(aes(x = fitted, y = observed)) +
+        geom_point(alpha = 0.2) +
+        geom_abline(intercept = 0, slope = 1, color = "blue", size = 0.2) +
+        scale_x_continuous(limits = c(min_axis, max_axis)) +
+        scale_y_continuous(limits = c(min_axis, max_axis)) +
+        labs(title = paste(year, type),
+             subtitle = paste0("N = ", nrow(data), ", r-squared = ", rsq),
+             x = "Fitted log(Antbtc_Tot_Clms)",
+             y = "Observed\nlog(Antbtc_Tot_Clms)")
+    fit_list = list(resid = resid_plot, fit = fit_plot)
+    fit_list
+})
+names(by_type_2019) <- provider_types
+by_type_2019
+
+```
+
+<br>
+
+***
+
+## General medicine fits by year
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# General medicine dataset
+gm <- p %>%
+    mutate(Tot_Benes = if_else(is.na(Tot_Benes), 10, Tot_Benes),
+           percent_fem = Bene_Feml_Cnt / Tot_Benes,
+           percent_white = Bene_Race_Wht_Cnt / Tot_Benes,
+           primary_RUCA = floor(Prscrbr_RUCA)) %>%
+    filter(Std_Provider_Type == "General Medicine",
+           !is.na(Antbtc_Tot_Clms),
+           !Antbtc_Tot_Clms < 11,
+           !is.na(Tot_Benes),
+           !is.na(primary_RUCA),
+           !is.na(Prscrbr_Gndr),
+           !is.na(Bene_Avg_Risk_Scre),
+           !is.na(percent_fem),
+           !is.na(percent_white)) 
+
+# Models of general medicine data by year
+years <- gm %>%
+    count(year) %>%
+    pull(year)
+by_year_gm <- map(years, function(year) {
+    data <- gm %>%
+        filter(year == !!year)
+    year <- unique(data$year)
+    type <- unique(data$Std_Provider_Type)
+    fit <- lm(
+        log(Antbtc_Tot_Clms) ~ 1 +
+            log(Tot_Benes) +
+            primary_RUCA +
+            Prscrbr_Gndr +
+            Bene_Avg_Risk_Scre +
+            percent_fem +
+            percent_white,
+        data = data)
+    observed <- log(data$Antbtc_Tot_Clms)
+    fitted <- fitted(fit)
+    max_axis <- max(c(observed, fitted))
+    min_axis <- min(c(observed, fitted))
+    residual <-  residuals(fit)
+    rsq <- round(summary(fit)$r.squared, digits = 2)
+    resid_plot <- bind_cols(fitted, residual) %>%
+        ggplot(aes(x = fitted, y = residual)) +
+        geom_point(alpha = 0.2) +
+        labs(title = paste(year, type),
+             subtitle = paste0("N = ", nrow(data), ", r-squared = ", rsq),
+             x = "Fitted log(Antbtc_Tot_Clms)",
+             y = "Residual\nlog(Antbtc_Tot_Clms)")
+    fit_plot <- bind_cols(observed, fitted) %>%
+        ggplot(aes(x = fitted, y = observed)) +
+        geom_point(alpha = 0.2) +
+        geom_abline(intercept = 0, slope = 1, color = "blue", size = 0.2) +
+        scale_x_continuous(limits = c(min_axis, max_axis)) +
+        scale_y_continuous(limits = c(min_axis, max_axis)) +
+        labs(title = paste(year, type),
+             subtitle = paste0("N = ", nrow(data), ", r-squared = ", rsq),
+             x = "Fitted log(Antbtc_Tot_Clms)",
+             y = "Observed\nlog(Antbtc_Tot_Clms)")
+    fit_list = list(resid = resid_plot, fit = fit_plot)
+    fit_list
+})
+names(by_year_gm) <- years
+by_year_gm
+
+```
 
 ```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-# Only general medicine providers from 2019
-p2019.3 <- p2019.2 %>%
-    filter(Std_Provider_Type == "General Medicine")
-
-# Check missingness
-p2019.3 %>%
-    summarize_all(~ sum(is.na(.) | is.infinite(.)) / n()) %>%
-    mutate(across(where(is.double), ~ format(., digits = 2, nsmall = 2))) %>%
-    datatable()
-
-# Model
-qp_gm1 <- glm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
-                        primary_RUCA +
-                        Prscrbr_Gndr +
-                        Bene_Avg_Risk_Scre +
-                        percent_fem +
-                        percent_white,
-             data = p2019.3,
-             family = quasipoisson)
 
 # Save model fitted & residuals
 p2019.3$pred_qp_gm1 <- fitted(qp_gm1)
 p2019.3$resid_qp_gm1 <- residuals.glm(qp_gm1, type = "pearson")
+p2019.3$pred_lm_gm1 <- fitted(lm_gm1)
+p2019.3$resid_lm_gm1 <- residuals(lm_gm1)
 
+p2019.2$pred_lm_gm1 <- fitted(lm_gm1)
+p2019.2$resid_lm_gm1 <- residuals(lm_gm1)
 
+# Residuals and observed versus predicted for quasipoisson model of Antbtc_Tot_Clms
 p2019.3 %>%
     select(fitted = pred_qp_gm1, residual = resid_qp_gm1) %>%
     ggplot(aes(x = fitted, y = residual)) +
     geom_point(alpha = 0.2) +
     labs(title = "Distribution of residuals, quasipoisson, general medicine")
-
-
-
 p2019.3 %>%
     ggplot(aes(x = Antbtc_Tot_Clms, y = pred_qp_gm1)) +
     geom_point(alpha = 0.1) +
@@ -1673,92 +1874,239 @@ p2019.3 %>%
              round(cor(p2019.3$Antbtc_Tot_Clms, p2019.3$pred_qp_gm1)^2,
                    digits = 2)))
 
+# Residuals and observed versus predicted for linear model of log(Antbtc_Tot_Clms
+p2019.2 %>%
+    select(fitted = pred_lm_gm1, residual = resid_lm_gm1) %>%
+    ggplot(aes(x = fitted, y = residual)) +
+    geom_point(alpha = 0.2) +
+    labs(title = "Distribution of residuals for a Gaussian model of log(Antbtc_Tot_Clms), general medicine providers only")
+p2019.2 %>%
+    ggplot(aes(x = log(Antbtc_Tot_Clms), y = pred_lm_gm1)) +
+    geom_point(alpha = 0.1) +
+    geom_abline(intercept = 0, slope = 1, color = "blue", size = 0.2) +
+    labs(title = "Observed versus predicted values for a Gaussian model of log(Antbtc_Tot_Clms), general medicine providers only",
+         subtitle = paste(
+             "R-squared =",
+             round(cor(log(p2019.2$Antbtc_Tot_Clms), p2019.2$pred_lm_gm1)^2,
+                   digits = 2)))
+
+
+# GETTING GOOD PREDICTION AND RESIDUALS FOR GAUSSIAN MODEL OF LOG(ANTBTC_TOT_CLMS), general medicine only. Follow up on this:
+# 2. Use model comparison to add/subtract terms
+# 3. Fit models for other provider types.
+# 4. Fit models for other years.
+
 ```
 
+<br>
 
-```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+***
 
-# Compute O/E ratios. Larger ratios mean we're underpredicting antibiotic counts. Smaller ratios mean we're overpredicting antibiotic counts. Karl's figure in PPT has zero as the midpoint rather than 1. More like log-odds.
-# Note that I'm computing counts of observed / counts of expected. This should be the same as rates of observed / rates of expected (e.g., counts per 1K beneficiaries), because the number of beneficiaries will be the same and will cancel out. Might consider a weighted mean though when I summarize by county...
-p2019.2 <- p2019.2 %>%
-    mutate(oe_ratio = Antbtc_Tot_Clms / pred_qpois9,
-           log_oe_ratio = log(oe_ratio))
+## General medicine coefficients for 2019
 
-# Visualize OE ratio
-p2019.2 %>%
-    mutate(Prscrbr_NPI = fct_reorder(Prscrbr_NPI, oe_ratio)) %>%
-    ggplot(aes(x = Prscrbr_NPI, y = oe_ratio)) +
-    geom_col()
+<br>
 
-# Visualize log(OE ratio). Providers with positive log(OE ratio) have higher
-# empirical claims relative to model predictions.
-p2019.2 %>%
-    mutate(Prscrbr_NPI = fct_reorder(Prscrbr_NPI, log_oe_ratio)) %>%
-    ggplot(aes(x = Prscrbr_NPI, y = log_oe_ratio)) +
-    geom_col() +
-    theme(panel.grid.major.x = element_blank(),
-          axis.text.x = element_blank(),
-          axis.ticks.x = element_blank()) +
-    labs(title = "Log(observed/expected) antibiotic counts",
-         subtitle = "2019 Idaho by-provider data, N = 3,321")
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-# Use tigris to get shapes of zip codes
-library(tigris)
+lm(log(Antbtc_Tot_Clms) ~ 1 +
+       log(Tot_Benes) +
+       primary_RUCA +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       percent_fem +
+       percent_white,
+   data = p2019 %>%
+       filter(Std_Provider_Type == "General Medicine")) %>%
+    tidy() %>%
+    mutate(across(matches("estimate|error|statistic"),
+                  ~ round(., digits = 2)),
+           p.value = format(p.value, digits = 2)) %>%
+    datatable(rownames = FALSE,
+              options = list(dom = "t"))
 
-# Have a couple of zips starting with "60". Are those in Idaho? Check. All
-# others start with "83".
-idaho_zips <- p2019.2 %>%
-    select(zip = Prscrbr_Zip5) %>%
-    unique()
+```
 
-# Retrieve shapfiles for all zip codes starting with "83
-zips_sf <- zctas(cb = TRUE, starts_with = "83", year = "2019",
-                 class = "sf") %>%
-    select(zip = ZCTA5CE10, geometry)
+<br>
 
-# Filter to just the ones we want
-zips_sf <- zips_sf %>%
-    inner_join(idaho_zips, by = "zip")
+***
 
+## General medicine coefficients by year
 
+Coefficients are relatively stable across years for models fit to general medicine data.
 
-# Compute mean log_oe by county
-county_OEs <- p2019.2 %>%
-    group_by(county) %>%
-    summarize(mean = mean(log_oe_ratio, na.rm = TRUE), .groups = "drop") %>%
-    arrange(desc(mean))
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, , fig.height = 7}
 
+# Table of coefficients
+by_year_gm_coef <- map_dfr(years, function(year) {
+    data <- gm %>%
+        filter(year == !!year)
+    year <- unique(data$year)
+    type <- unique(data$Std_Provider_Type)
+    lm(log(Antbtc_Tot_Clms) ~ 1 +
+            log(Tot_Benes) +
+            primary_RUCA +
+            Prscrbr_Gndr +
+            Bene_Avg_Risk_Scre +
+            percent_fem +
+            percent_white,
+        data = data) %>%
+        tidy() %>%
+        mutate(year = !!year)
+})
 
-# Shapes for Idaho counties
+# Figure
+by_year_gm_coef %>%
+    ggplot(aes(x = year, y = estimate, group = term, color = term,
+               fill = term)) +
+    geom_line() +
+    geom_ribbon(aes(ymin = estimate - std.error, ymax = estimate + std.error),
+                alpha = 0.2, linetype = 0) +
+    scale_color_discrete(guide = "none") +
+    scale_fill_discrete(guide = "none") +
+    facet_wrap(~ term) +
+    labs(x = "Year", y = "Estimate")
+
+```
+
+<br>
+
+***
+
+## 2019 coefficients by provider type
+
+Coefficients show some variability across provider types for models fit to 2019 data.
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.height = 8, fig.width = 8}
+
+# Table of coefficients
+by_type_2019_coef <- map_dfr(provider_types, function(type) {
+    data <- p2019 %>%
+        filter(Std_Provider_Type == !!type)
+    year <- unique(data$year)
+    type <- unique(data$Std_Provider_Type)
+    lm(log(Antbtc_Tot_Clms) ~ 1 +
+            log(Tot_Benes) +
+            primary_RUCA +
+            Prscrbr_Gndr +
+            Bene_Avg_Risk_Scre +
+            percent_fem +
+            percent_white,
+        data = data) %>%
+        tidy() %>%
+        mutate(Std_Provider_Type = !!type)
+})
+
+# Figure
+by_type_2019_coef %>%
+    ggplot(aes(x = Std_Provider_Type, y = estimate, group = term,
+               color = term, fill = term)) +
+    geom_line() +
+    geom_ribbon(aes(ymin = estimate - std.error, ymax = estimate + std.error),
+                alpha = 0.2, linetype = 0) +
+    labs(x = "Provider\nType", y = "Estimate") +
+    coord_flip() +
+    scale_color_discrete(guide = "none") +
+    scale_fill_discrete(guide = "none") +
+    facet_wrap(~ term)
+    
+
+```
+
+<br>
+
+***
+
+## Antibiotic use by Idaho county
+
+The figure below summarizes 2019 Medicare Part D antibiotic claims made by general medicine providers. Lighter colors represent more claims than expected after taking into account provider gender and rurality, and beneficiary health status, proportion of females, and proportion of whites. Gray indicates no data.
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.height = 10, fig.width = 9}
+
+# Read in address info
+address_county <- read_feather("Address-query-county bank.feather")
+
+# Add county to p
+p2 <- p %>%
+    left_join(address_county %>%
+                  select(dataset_address, county),
+              by = "dataset_address")
+
+# No county NAs p2.
+# sum(is.na(p2$county))
+
+# After removing Not ID we have data from only 43 counties. Which one is
+# missing?
+# p2 %>%
+#     filter(county != "Not ID") %>%
+#     count(county)
+
+# General medicine dataset.
+gm2 <- p2 %>%
+    mutate(Tot_Benes = if_else(is.na(Tot_Benes), 10, Tot_Benes),
+           percent_fem = Bene_Feml_Cnt / Tot_Benes,
+           percent_white = Bene_Race_Wht_Cnt / Tot_Benes,
+           primary_RUCA = floor(Prscrbr_RUCA)) %>%
+    filter(Std_Provider_Type == "General Medicine",
+           !is.na(Antbtc_Tot_Clms),
+           !Antbtc_Tot_Clms < 11,
+           !is.na(Tot_Benes),
+           !is.na(primary_RUCA),
+           !is.na(Prscrbr_Gndr),
+           !is.na(Bene_Avg_Risk_Scre),
+           !is.na(percent_fem),
+           !is.na(percent_white)) 
+
+# After filtering to general medicine we only have data from 39 counties.
+# gm2 %>%
+#     filter(county != "Not ID") %>%
+#     count(county)
+
+# Loop over general medicine to fit models by year
+fit_gm_year <- map_dfr(years, function(year) {
+    data <- gm2 %>%
+        filter(year == !!year,
+               county != "Not ID")
+    fit <- lm(log(Antbtc_Tot_Clms) ~ 1 +
+            log(Tot_Benes) +
+            primary_RUCA +
+            Prscrbr_Gndr +
+            Bene_Avg_Risk_Scre +
+            percent_fem +
+            percent_white,
+        data = data)
+    data %>%
+        mutate(fitted = fitted(fit))
+})
+
+# Compute log OE by year and county. 39 counties represented.
+county_yr_oe <- fit_gm_year %>%
+    filter(county != "Not ID") %>%
+    mutate(log_oe = log(log(Antbtc_Tot_Clms) / fitted)) %>%
+    group_by(year, county) %>%
+    summarize(mean = mean(log_oe, na.rm = TRUE), .groups = "drop")
+
+# 39 counties represented across all years...
+# county_yr_oe %>%
+#     count(county)
+
+# ... but only 37 in 2019
+# county_yr_oe %>%
+#     filter(year == 2019) %>%
+#     count(county)
+
+# Get county shapes and join in OEs. This data structure can have NAs in the mean column, but if there are NAs in any other columns it will cause the county to not be plotted, rather than being plotted gray (no data).
 counties_sf <- counties(state = "ID", cb = FALSE) %>%
-    left_join(county_OEs %>%
-                  rename(NAMELSAD = county),
+    left_join(county_yr_oe %>%
+                  filter(year == 2019) %>%
+                  select(NAMELSAD = county, mean),
               by = "NAMELSAD") %>%
     mutate(NAME = str_wrap(NAME, 5))
 
-
-plot(counties_sf)
-
-
-
-# Requires that Google Maps Static API is enabled
-library(ggmap)
-library(ggrepel)
-register_google(key = api_key)
-
-# Idaho bounding box (left, bottom, right, top)
-id_box <- c(left = -117.5, bottom = 41.7, right = -110.5, top = 49.2)
-
-# For some reason I'm only able to get the stamen terrain map
-basemap <- get_map(id_box, source = "stamen", maptype = "toner-lite")
-
-    
-# This looks pretty good.
-# Missing data for Clark & Lewis counties
+# Figure
 counties_sf %>%
     ggplot(aes(fill = mean, label = NAME)) +
-    geom_sf() +
-    geom_sf_text(size = 3) +
+    geom_sf(alpha = 0.8) +
+    geom_sf_text(size = 3.25) +
     scale_fill_continuous(name = "Log(Observed/Expected)",
                           type = "viridis") +
     theme(axis.line = element_blank(),
@@ -1766,109 +2114,10 @@ counties_sf %>%
           axis.title.y = element_blank(),
           axis.text = element_blank(),
           axis.ticks = element_blank(),
-          panel.grid.major = element_blank()) +
-    labs(title = "2019 Medicare Part D antibiotic claims",
-         subtitle = str_wrap("Lighter colors represents more claims than expected after taking into account provider type, gender, rurality, and beneficiary age, health status, proportion of females, and proportion of caucasians.", 100))
-    
+          panel.grid.major = element_blank())
 
-
-# Look at getting data for missing counties
-
-# Some kind of writeup for Karl. Include residuals from lm versus quasipoisson.
-
-
-
-.
-p2019.2$resid_qpois9 <- residuals(qpois9, type = "pearson")[]
-
-# Roughly normally distributed, but with a long right tail
-p2019.2 %>%
-    ggplot(aes(x = resid_qpois9)) +
-    geom_density()
-
-# Residuals versus fitted. Looks like more variance in residuals as fitted
-# increase (fan shape).
-p2019.2 %>%
-    select(fitted = pred_qpois9, residual = resid_qpois9) %>%
-    ggplot(aes(x = fitted, y = residual)) +
-    geom_point(alpha = 0.2)
-
-# QQ plot
-qqnorm(p2019.2$resid_qpois9)
-qqline(p2019.2$resid_qpois9)
-
-# What do residuals look like for negative binomial?. Distribution has mode < 0
-# and shorter tail. Less fan-like, more funnel-like. Worse qq-plot.
-p2019.2$resid_nb9 <- residuals(nb9, type = "pearson")
-p2019.2 %>%
-    ggplot(aes(x = resid_nb9)) +
-    geom_density()
-p2019.2 %>%
-    select(fitted = pred_nb9, residual = resid_nb9) %>%
-    ggplot(aes(x = fitted, y = residual)) +
-    geom_point(alpha = 0.2)
-qqnorm(p2019.2$resid_nb9)
-qqline(p2019.2$resid_nb9)
-
-# What do residuals look like for a gaussian model?. Distribution of residuals
-# seems to have a mode < 0 and very long tail. Definite fan shape, quite a bit more likely to miss low than high. High values
-# off by hundreds in QQ plot.
-lm9 <- lm(Antbtc_Tot_Clms ~ offset(log(Tot_Benes)) + 1 +
-                        Prscrbr_RUCA +
-                        I(Prscrbr_RUCA^2) +
-                        Prscrbr_Gndr +
-                        Bene_Avg_Risk_Scre +
-                        I(Bene_Avg_Risk_Scre^2) +
-                        I(Bene_Avg_Risk_Scre^3) +
-                        Std_Provider_Type +
-                        percent_fem +
-                        I(percent_fem^2) +
-                        percent_white,
-             data = p2019.2)
-summary(lm9)
-p2019.2$pred_lm9 <- fitted(lm9)
-p2019.2$resid_lm9 <- residuals(lm9)
-p2019.2 %>%
-    ggplot(aes(x = resid_lm9)) +
-    geom_density()
-p2019.2 %>%
-    select(fitted = pred_lm9, residual = resid_lm9) %>%
-    ggplot(aes(x = fitted, y = residual)) +
-    geom_point(alpha = 0.2)
-qqnorm(p2019.2$resid_lm9)
-qqline(p2019.2$resid_lm9)
-
-
-
-
-
-
-
-
-# If we're really dropping all 0 claims then the strengths of the hurdle and zeroinfl models aren't needed as much. Neither model will even work without zeros in the data--throw errors complaining that minimum count isn't zero. For Antbtc_Tot_Clms we can't really get to zero, since the zeros that are in there are kind of suspect.
-
-# So go back to poisson, quasi-poisson, and negative binomial
-
-
-library(ISwR)
-library(dplyr)
-data(eba1977)
-eba1977 = eba1977 %>% mutate(lpop = log(pop))
-model1 = glm(cases ~ city + age, offset=lpop, family=poisson, data=eba1977)
-summary(model1)
-anova(model1, test='Chisq')
-anova(model1)
-
-eba1977 = eba1977 %>% mutate(
- age.mid = rep(c(47,57,62,67,72,75), each=4),
- e.rate = cases/pop)
-ggplot(eba1977, aes(x=age.mid, y=e.rate, color=city)) + 
- geom_point() + geom_smooth(method='lm', se=FALSE)
-model = glm(cases ~ city + age.mid, offset=lpop, family=poisson, data=eba1977)
-summary(model)
-anova(model, test='Chisq')
-
-
-
+# NEXT: need to loop to create figures by year, by provider type
+# If we want a heatmap of antibiotic claims across all provider types then we need a model that includes provider type and interactions with other vars. Check residuals on this.
+# Should age be in models?
 
 ```
