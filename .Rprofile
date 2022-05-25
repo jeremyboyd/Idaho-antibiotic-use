@@ -13,6 +13,7 @@ library(brms)
 library(lmerTest)
 library(rstan)
 library(Hmisc)
+library(tigris)             # County shapefiles
 
 # Resolve conflicts
 filter <- dplyr::filter
