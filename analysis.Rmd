@@ -2107,8 +2107,8 @@ counties_sf %>%
     ggplot(aes(fill = mean, label = NAME)) +
     geom_sf(alpha = 0.8) +
     geom_sf_text(size = 3.25) +
-    scale_fill_continuous(name = "Log(Observed/Expected)",
-                          type = "viridis") +
+    scale_fill_binned(name = "Log(Observed/Expected)",
+                      type = "viridis") +
     theme(axis.line = element_blank(),
           axis.title.x = element_blank(),
           axis.title.y = element_blank(),
@@ -2116,7 +2116,7 @@ counties_sf %>%
           axis.ticks = element_blank(),
           panel.grid.major = element_blank())
 
-# NEXT: need to loop to create figures by year, by provider type
+# NEXT: need to loop to create county heatmap figures by year, by provider type
 # If we want a heatmap of antibiotic claims across all provider types then we need a model that includes provider type and interactions with other vars. Check residuals on this.
 # Should age be in models?
 
