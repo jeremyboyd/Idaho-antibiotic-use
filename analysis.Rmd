@@ -2081,7 +2081,8 @@ county_yr_oe <- fit_gm_year %>%
     filter(county != "Not ID") %>%
     mutate(log_oe = log(log(Antbtc_Tot_Clms) / fitted)) %>%
     group_by(year, county) %>%
-    summarize(mean = mean(log_oe, na.rm = TRUE), .groups = "drop")
+    summarize(n_providers = sum(!is.na(log_oe)),
+              mean = mean(log_oe, na.rm = TRUE), .groups = "drop")
 
 # 39 counties represented across all years...
 # county_yr_oe %>%
@@ -2096,15 +2097,27 @@ county_yr_oe <- fit_gm_year %>%
 counties_sf <- counties(state = "ID", cb = FALSE) %>%
     left_join(county_yr_oe %>%
                   filter(year == 2019) %>%
-                  select(NAMELSAD = county, mean),
+                  select(NAMELSAD = county, mean, n_providers),
               by = "NAMELSAD") %>%
-    mutate(NAME = str_wrap(NAME, 5))
+    mutate(n_providers = if_else(is.na(n_providers), 0L, n_providers),
+           NAME = str_wrap(NAME, 5),
+           NAME = paste(NAME, "\n", "N =",
+                         str_squish(format(n_providers, big.mark = ","))))
 
 # Figure
 counties_sf %>%
-    ggplot(aes(fill = mean, label = NAME)) +
+    ggplot(aes(fill = mean, label = NAME, geometry = geometry)) +
     geom_sf(alpha = 0.8) +
-    geom_sf_text(size = 3.25) +
+    ggrepel::geom_label_repel(
+        stat = "sf_coordinates",
+        min.segment.length = 0.4,
+        force = 0.3,
+        force_pull = 3,
+        size = 3.25,
+        alpha = 0.6,
+        label.size = 0.1,
+        max.iter = 4000,
+        seed = 1) +
     scale_fill_binned(name = "Log(Observed/Expected)",
                       type = "viridis") +
     theme(axis.line = element_blank(),
@@ -2113,7 +2126,6 @@ counties_sf %>%
           axis.text = element_blank(),
           axis.ticks = element_blank(),
           panel.grid.major = element_blank())
-
 
 ```
 
@@ -2198,7 +2210,8 @@ counties_sf <- counties(state = "ID", cb = FALSE) %>%
               by = "NAMELSAD") %>%
     mutate(n_providers = if_else(is.na(n_providers), 0L, n_providers),
            NAME = str_wrap(NAME, 5),
-           NAME = paste0(NAME, "\n", "N = ", n_providers))
+           NAME = paste(NAME, "\n", "N =",
+                         str_squish(format(n_providers, big.mark = ","))))
 
 # Figure. This version uses ggrepel for labels.
 counties_sf %>%
@@ -2206,8 +2219,8 @@ counties_sf %>%
     geom_sf(alpha = 0.8) +
     ggrepel::geom_label_repel(
         stat = "sf_coordinates",
-        min.segment.length = 0,
-        force = 0.5,
+        min.segment.length = 0.4,
+        force = 0.3,
         force_pull = 3,
         size = 3.25,
         alpha = 0.6,
@@ -2234,4 +2247,3 @@ counties_sf %>%
 - Use model comparison to develop a standard set of predictors to use across all provider type models.
 - Start formalizing methods.
 - Develop cleaner code to update place names and county information as new data come in.
-- Way to show provider counts in each county? Could be an "N = #" string that's combined with the county name.
