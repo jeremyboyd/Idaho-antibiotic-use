@@ -2081,8 +2081,8 @@ county_yr_oe <- fit_gm_year %>%
     filter(county != "Not ID") %>%
     mutate(log_oe = log(log(Antbtc_Tot_Clms) / fitted)) %>%
     group_by(year, county) %>%
-    summarize(n_providers = sum(!is.na(log_oe)),
-              mean = mean(log_oe, na.rm = TRUE), .groups = "drop")
+    summarize(N = sum(!is.na(log_oe)),
+              `Log(O/E)` = mean(log_oe, na.rm = TRUE), .groups = "drop")
 
 # 39 counties represented across all years...
 # county_yr_oe %>%
@@ -2097,35 +2097,107 @@ county_yr_oe <- fit_gm_year %>%
 counties_sf <- counties(state = "ID", cb = FALSE) %>%
     left_join(county_yr_oe %>%
                   filter(year == 2019) %>%
-                  select(NAMELSAD = county, mean, n_providers),
+                  select(NAMELSAD = county, `Log(O/E)`, N),
               by = "NAMELSAD") %>%
-    mutate(n_providers = if_else(is.na(n_providers), 0L, n_providers),
-           NAME = str_wrap(NAME, 5),
-           NAME = paste(NAME, "\n", "N =",
-                         str_squish(format(n_providers, big.mark = ","))))
+    mutate(N = if_else(is.na(N), 0L, N),
+           County = NAME)
 
-# Figure
-counties_sf %>%
-    ggplot(aes(fill = mean, label = NAME, geometry = geometry)) +
+# Figure. Version with points encoding number of providers.
+library(plotly)
+p <- counties_sf %>%
+    ggplot(aes(fill = round(`Log(O/E)`, digits = 2),
+               County = County,
+               N = N,
+               geometry = geometry)) +
     geom_sf(alpha = 0.8) +
-    ggrepel::geom_label_repel(
-        stat = "sf_coordinates",
-        min.segment.length = 0.4,
-        force = 0.3,
-        force_pull = 3,
-        size = 3.25,
-        alpha = 0.6,
-        label.size = 0.1,
-        max.iter = 4000,
-        seed = 1) +
+    # stat_sf_coordinates(
+    #     aes(size = n_providers, County = County, fill = mean),
+    #     geom = "point", alpha = 0.2) +
     scale_fill_binned(name = "Log(Observed/Expected)",
                       type = "viridis") +
+    # guides(fill = guide_colorsteps(title = "Log(Observed/Expected)",
+    #                                order = 1),
+    #        size = guide_legend(title = "N Providers",
+    #                            order = 2)) +
     theme(axis.line = element_blank(),
           axis.title.x = element_blank(),
           axis.title.y = element_blank(),
           axis.text = element_blank(),
           axis.ticks = element_blank(),
           panel.grid.major = element_blank())
+ggplotly(p, tooltip = c("County", "Log(O/E)", "N"))
+
+```
+
+<br>
+
+***
+
+## General medicine providers in Plotly
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.height = 8.5, fig.width = 8}
+
+# Get US county shapes
+url <- 'https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json'
+counties <- rjson::fromJSON(file=url)
+
+# Get table with US county FIPS
+url2<- "https://raw.githubusercontent.com/plotly/datasets/master/fips-unemp-16.csv"
+df <- read.csv(url2, colClasses=c(fips="character")) %>%
+    as_tibble()
+
+# Table of Idaho county FIPS, county names, log(O/E)    
+df2 <- tibble(fips = counties_sf$COUNTYFP,
+              state = counties_sf$STATEFP,
+              county = counties_sf$NAME,
+              mean = counties_sf$`Log(O/E)`) %>%
+    mutate(fips = paste0(state, fips)) %>%
+    select(fips, county, state, mean)
+
+# Join Idaho-specific info to df--the table with all US county FIPS
+df3 <- df %>%
+    left_join(df2, by = "fips") %>%
+    mutate(hover = paste0(county, "<br>", round(mean, digits = 2)),
+           trace2 = if_else(is.na(mean) & state == "16", 1L, NA_integer_))
+
+# Figre
+plot_ly() %>%
+    
+    # Trace for counties with defined O/E
+    add_trace(
+        type = "choroplethmapbox",
+        geojson = counties,
+        locations = df3$fips,
+        z = df3$mean,
+        zmin = min(df3$mean),
+        zmax = max(df3$mean),
+        text = df3$hover,
+        hoverinfo = "text",
+        colorscale = "Viridis",
+        marker = list(line = list(width = 0),
+                      opacity = 0.5)) %>%
+    
+    # Trace for counties with missing O/E
+    add_trace(
+        type = "choroplethmapbox",
+        geojson = counties,
+        locations = df3$fips,
+        z = df3$trace2,
+        text = df3$hover,
+        hoverinfo = "text",
+        
+        # Counties with missing values will be gray, but scale won't show
+        colorscale = "Greys",
+        showscale = FALSE,
+        marker = list(line = list(width = 0),
+                      opacity = 0.5)) %>%
+    colorbar(title = "Log(Observed/Expected)",
+             outlinewidth = 0,
+             thickness = 35) %>%
+    layout(mapbox = list(
+        style = "carto-positron",
+        zoom = 5.5,
+        center = list(lon = -114, lat = 45.6)))
 
 ```
 
@@ -2213,7 +2285,7 @@ counties_sf <- counties(state = "ID", cb = FALSE) %>%
            NAME = paste(NAME, "\n", "N =",
                          str_squish(format(n_providers, big.mark = ","))))
 
-# Figure. This version uses ggrepel for labels.
+# Figure. Version with labels showing number of providers and county names
 counties_sf %>%
     ggplot(aes(fill = mean, label = NAME, geometry = geometry)) +
     geom_sf(alpha = 0.8) +
