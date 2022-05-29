@@ -2135,32 +2135,39 @@ ggplotly(p, tooltip = c("County", "Log(O/E)", "N"))
 
 ## General medicine providers in Plotly
 
-```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.height = 8.5, fig.width = 8}
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-# Get US county shapes
-url <- 'https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json'
-counties <- rjson::fromJSON(file=url)
+# US county shapes
+counties <- rjson::fromJSON(file = "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json")
 
-# Get table with US county FIPS
-url2<- "https://raw.githubusercontent.com/plotly/datasets/master/fips-unemp-16.csv"
-df <- read.csv(url2, colClasses=c(fips="character")) %>%
-    as_tibble()
+# US county FIPS
+df <- read.csv(
+    "https://raw.githubusercontent.com/plotly/datasets/master/fips-unemp-16.csv",
+    colClasses = c(fips = "character")) %>%
+    as_tibble() %>%
+    select(fips)
 
-# Table of Idaho county FIPS, county names, log(O/E)    
+# Table of Idaho county FIPS, county names, log(O/E).
+# NOTE: Better if I get this info from counties JSON. Then I don't need to use
+# tigris at all.
 df2 <- tibble(fips = counties_sf$COUNTYFP,
               state = counties_sf$STATEFP,
               county = counties_sf$NAME,
-              mean = counties_sf$`Log(O/E)`) %>%
+              mean = counties_sf$`Log(O/E)`,
+              N = counties_sf$N) %>%
     mutate(fips = paste0(state, fips)) %>%
-    select(fips, county, state, mean)
+    select(fips, county, state, mean, N)
 
 # Join Idaho-specific info to df--the table with all US county FIPS
 df3 <- df %>%
     left_join(df2, by = "fips") %>%
-    mutate(hover = paste0(county, "<br>", round(mean, digits = 2)),
-           trace2 = if_else(is.na(mean) & state == "16", 1L, NA_integer_))
+    mutate(hover_text = paste0(
+        county, "<br>",
+        "N = ", N, "<br>",
+        round(mean, digits = 2)),
+        NA_trace = if_else(is.na(mean) & state == "16", 1L, NA_integer_))
 
-# Figre
+# Figure
 plot_ly() %>%
     
     # Trace for counties with defined O/E
@@ -2171,19 +2178,19 @@ plot_ly() %>%
         z = df3$mean,
         zmin = min(df3$mean),
         zmax = max(df3$mean),
-        text = df3$hover,
+        text = df3$hover_text,
         hoverinfo = "text",
         colorscale = "Viridis",
         marker = list(line = list(width = 0),
                       opacity = 0.5)) %>%
     
-    # Trace for counties with missing O/E
+    # Trace for counties with NA O/E
     add_trace(
         type = "choroplethmapbox",
         geojson = counties,
         locations = df3$fips,
-        z = df3$trace2,
-        text = df3$hover,
+        z = df3$NA_trace,
+        text = df3$hover_text,
         hoverinfo = "text",
         
         # Counties with missing values will be gray, but scale won't show
@@ -2193,10 +2200,10 @@ plot_ly() %>%
                       opacity = 0.5)) %>%
     colorbar(title = "Log(Observed/Expected)",
              outlinewidth = 0,
-             thickness = 35) %>%
+             thickness = 30) %>%
     layout(mapbox = list(
         style = "carto-positron",
-        zoom = 5.5,
+        zoom = 4.6,
         center = list(lon = -114, lat = 45.6)))
 
 ```
