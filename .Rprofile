@@ -14,6 +14,7 @@ library(lmerTest)
 library(rstan)
 library(Hmisc)
 library(tigris)             # County shapefiles
+library(plotly)
 
 # Resolve conflicts
 filter <- dplyr::filter
