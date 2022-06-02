@@ -32,6 +32,7 @@ p <- read_feather("Idaho prescribers by provider data.feather") %>%
     mutate(Bene_Prop_Fem = Bene_Feml_Cnt / Tot_Benes,
            Bene_Prop_White = Bene_Race_Wht_Cnt / Tot_Benes,
            Prscrbr_RUCA = floor(Prscrbr_RUCA),
+           Prscrbr_RUCA_fct = factor(Prscrbr_RUCA),
            dataset_address = str_squish(
                 paste(Prscrbr_St1,
                       Prscrbr_St2,
@@ -50,6 +51,7 @@ p <- read_feather("Idaho prescribers by provider data.feather") %>%
            Prscrbr_NPI,
            Prscrbr_Type_Std = Std_Provider_Type,
            Prscrbr_RUCA,
+           Prscrbr_RUCA_fct,
            Prscrbr_Gndr,
            Prscrbr_State_Abrvtn,
            Prscrbr_County = county,
@@ -58,7 +60,8 @@ p <- read_feather("Idaho prescribers by provider data.feather") %>%
            Bene_Avg_Age,
            Bene_Avg_Risk_Scre,
            Bene_Prop_Fem,
-           Bene_Prop_White)
+           Bene_Prop_White,
+           dataset_address)
 
 ```
 
@@ -1346,7 +1349,8 @@ p2019.2 %>%
 
 ***
 
-# Models
+# General medicine
+
 ## Details
 
 - All data in this section are from the [Medicare Part D Prescribers by Provider dataset](https://data.cms.gov/provider-summary-by-type-of-service/medicare-part-d-prescribers/medicare-part-d-prescribers-by-provider).
@@ -1354,17 +1358,13 @@ p2019.2 %>%
 - Missing values of Tot_Benes were imputed as 10.
 - All secondary codes were stripped from Prscrbr_RUCA--e.g., 4.1 became 4.
 
-<br>
+## Bivariate relationships
 
-***
+Data are general medicine providers in 2019. Each figure summarizes the relationship between a predictor and the outcome using a LOESS smoother.
 
-## Univariate relationships
+### Prscrbr_RUCA
 
-Data are general medicine providers in 2019.
-
-### claims_1k ~ Prscrbr_RUCA
-
-Suggests inclusion of a squared RUCA term.
+Treat RUCA as an ordered factor.
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
@@ -1376,10 +1376,17 @@ gm <- p3 %>%
 gm2019 <- gm %>%
     filter(Year == 2019)
 
-# Suggests squared RUCA term
+# RUCA doesn't look very continuous
+# gm2019 %>%
+#     ggplot(aes(x = Prscrbr_RUCA, y = log_claims_1k)) +
+#     geom_jitter(alpha = 0.2, width = 0.2) +
+#     geom_smooth() +
+#     scale_x_continuous(breaks = seq(1, 10, 1))
+
 gm2019 %>%
-    ggplot(aes(x = Prscrbr_RUCA, y = log_claims_1k)) +
-    geom_smooth()
+    ggplot(aes(x = Prscrbr_RUCA_fct, y = log_claims_1k)) +
+    geom_boxplot()
+
 
 ```
 
@@ -1387,7 +1394,9 @@ gm2019 %>%
 
 ***
 
-### claims_1k ~ Prscrbr_Gndr
+### Prscrbr_Gndr
+
+Treat provider gender as a factor.
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
@@ -1402,7 +1411,7 @@ gm2019 %>%
 
 ***
 
-### claims_1k ~ Bene_Avg_Risk_Scre
+### Bene_Avg_Risk_Scre
 
 Suggests inclusion of squared and cubed HCC terms.
 
@@ -1411,6 +1420,7 @@ Suggests inclusion of squared and cubed HCC terms.
 # Suggests squared, cubed terms
 gm2019 %>%
     ggplot(aes(x = Bene_Avg_Risk_Scre, y = log_claims_1k)) +
+        geom_point(alpha = 0.2) +
     geom_smooth()
 
 ```
@@ -1419,15 +1429,16 @@ gm2019 %>%
 
 ***
 
-### claims_1k ~ Bene_Avg_Age
+### Bene_Avg_Age
 
 Suggests inclusion of a squared age term.
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-# Definite squared term
+# Suggests squared term
 gm2019 %>%
     ggplot(aes(x = Bene_Avg_Age, y = log_claims_1k)) +
+    geom_point(alpha = 0.2) +
     geom_smooth()
 
 ```
@@ -1436,7 +1447,7 @@ gm2019 %>%
 
 ***
 
-### claims_1k ~ Bene_Avg_Age
+### Bene_Prop_Fem
 
 Suggests inclusion of squared and cubed proportion female terms.
 
@@ -1445,6 +1456,7 @@ Suggests inclusion of squared and cubed proportion female terms.
 # Possible squared, cubed
 gm2019 %>%
     ggplot(aes(x = Bene_Prop_Fem, y = log_claims_1k)) +
+    geom_point(alpha = 0.2) +
     geom_smooth()
 
 ```
@@ -1453,7 +1465,7 @@ gm2019 %>%
 
 ***
 
-### claims_1k ~ Bene_Avg_Age
+### Bene_Prop_White
 
 Suggests inclusion of squared and cubed proportion white terms.
 
@@ -1462,6 +1474,7 @@ Suggests inclusion of squared and cubed proportion white terms.
 # Possible squared, cubed
 gm2019 %>%
     ggplot(aes(x = Bene_Prop_White, y = log_claims_1k)) +
+    geom_point(alpha = 0.2) +
     geom_smooth()
 
 ```
@@ -1470,19 +1483,16 @@ gm2019 %>%
 
 ***
 
-## Finding the right model
+## Model selection
 
 The full model of claims_1k for the 2019 general medicine dataset is defined as a model that includes linear terms for all of the predictors in the preceding section, as well as squared and cubed terms if indicated.
 
-We remove terms one at a time and use Chi-squared tests to compare fits.
-
-### Full model
+The full model (called *m1*) is shown below.
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 m1 <- lm(log_claims_1k ~ 1 +
-       Prscrbr_RUCA +
-       I(Prscrbr_RUCA^2) +
+       Prscrbr_RUCA_fct +
        Prscrbr_Gndr +
        Bene_Avg_Risk_Scre +
        I(Bene_Avg_Risk_Scre^2) +
@@ -1504,18 +1514,17 @@ summary(m1)
 
 ***
 
-### Cubed terms
+### Comparisons
 
-I start by removing cubed terms one at a time and comparing.
+Backward selection based on Chi-squared tests was used to arrive at a final model. We start by attempting to remove higher order cubed and squared terms. If a higher order term is shown to significantly contribute to the model fit, we keep it along with all lower order terms. For example, if Bene_Avg_Age^2 is found to contribute to the model fit, it is retained along with Bene_Avg_Age.
 
-Models with and without Bene_Prop_White^3 are not statistically different. Therefore we are justified in removing Bene_Prop_White^3. This is the new baseline.
+Comparison between the full model and one without Bene_Prop_White^3 (called *m2*) indicate that Bene_Prop_White^3 can be removed. *m2* becomes the new baseline model.
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # Remove of cubed percent white
 m2 <- lm(log_claims_1k ~ 1 +
-       Prscrbr_RUCA +
-       I(Prscrbr_RUCA^2) +
+       Prscrbr_RUCA_fct +
        Prscrbr_Gndr +
        Bene_Avg_Risk_Scre +
        I(Bene_Avg_Risk_Scre^2) +
@@ -1535,14 +1544,15 @@ anova(m1, m2, test = "Chisq")
 
 ```
 
-Models with and without Bene_Prop_Female^3 are not statistically different. Therefore we are justified in removing Bene_Prop_Female^3. This is the new baseline.
+<br>
+
+Comparison between *m2* and a model without Bene_Prop_Fem^3 (called *m3*) indicate that Bene_Prop_Fem^3 can be removed. *m3* becomes the new baseline model.
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # Remove cubed percent female
 m3 <- lm(log_claims_1k ~ 1 +
-       Prscrbr_RUCA +
-       I(Prscrbr_RUCA^2) +
+       Prscrbr_RUCA_fct +
        Prscrbr_Gndr +
        Bene_Avg_Risk_Scre +
        I(Bene_Avg_Risk_Scre^2) +
@@ -1560,14 +1570,15 @@ anova(m2, m3, test = "Chisq")
 
 ```
 
-A model with Bene_Avg_Risk_Scre^3 fits significantly better than one without. So we keep Bene_Avg_Risk_Scre^3.
+<br>
+
+Comparison between *m3* and a model without Bene_Avg_Risk_Scre^3 (called *m4*) indicate significantly better fit for *m3*. *m3* is retained as the baseline model.
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # Remove risk score cubed
 m4 <- lm(log_claims_1k ~ 1 +
-       Prscrbr_RUCA +
-       I(Prscrbr_RUCA^2) +
+       Prscrbr_RUCA_fct +
        Prscrbr_Gndr +
        Bene_Avg_Risk_Scre +
        I(Bene_Avg_Risk_Scre^2) +
@@ -1586,20 +1597,13 @@ anova(m3, m4, test = "Chisq")
 
 <br>
 
-***
-
-### Squared terms
-
-Now we remove squared terms one at a time and compare to the baseline model.
-
-Models with and without Bene_Prop_White^2 are not statistically different. Therefore we are justified in removing Bene_Prop_White^2. This is the new baseline.
+Comparison between *m3* and a model without without Bene_Prop_White^2 (called *m5*) indicate that Bene_Prop_White^2 can be removed. *m5* becomes the new baseline model.
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # Remove prop white squared
 m5 <- lm(log_claims_1k ~ 1 +
-       Prscrbr_RUCA +
-       I(Prscrbr_RUCA^2) +
+       Prscrbr_RUCA_fct +
        Prscrbr_Gndr +
        Bene_Avg_Risk_Scre +
        I(Bene_Avg_Risk_Scre^2) +
@@ -1617,14 +1621,15 @@ anova(m3, m5, test = "Chisq")
 
 ```
 
-A model with Bene_Prop_Fem^2 fits significantly better than one without. So we keep Bene_Prop_Fem^2.
+<br>
+
+Comparison between *m5* and a model without Bene_Prop_Fem^2 (called *m6*) indicate significantly better fit for *m5*. *m5* is retained as the baseline model.
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # Remove prop female squared
 m6 <- lm(log_claims_1k ~ 1 +
-       Prscrbr_RUCA +
-       I(Prscrbr_RUCA^2) +
+       Prscrbr_RUCA_fct +
        Prscrbr_Gndr +
        Bene_Avg_Risk_Scre +
        I(Bene_Avg_Risk_Scre^2) +
@@ -1640,14 +1645,15 @@ anova(m5, m6, test = "Chisq")
 
 ```
 
-A model with Bene_Avg_Age^2 fits significantly better than one without. So we keep Bene_Avg_Age^2.
+<br>
+
+Comparison between *m5* and a model without Bene_Avg_Age^2 (called *m7*) indicate significantly better fit for *m5*. *m5* is retained as the baseline model.
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # Remove age squared
 m7 <- lm(log_claims_1k ~ 1 +
-       Prscrbr_RUCA +
-       I(Prscrbr_RUCA^2) +
+       Prscrbr_RUCA_fct +
        Prscrbr_Gndr +
        Bene_Avg_Risk_Scre +
        I(Bene_Avg_Risk_Scre^2) +
@@ -1663,36 +1669,13 @@ anova(m5, m7, test = "Chisq")
 
 ```
 
-A model with Prscrbr_RUCA^2 fits significantly better than one without. So we keep Prscrbr_RUCA^2.
-
-```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
-
-# Remove RUCA squared
-m8 <- lm(log_claims_1k ~ 1 +
-       Prscrbr_RUCA +
-       Prscrbr_Gndr +
-       Bene_Avg_Risk_Scre +
-       I(Bene_Avg_Risk_Scre^2) +
-       I(Bene_Avg_Risk_Scre^3) +
-       Bene_Avg_Age +
-       I(Bene_Avg_Age^2) +
-       Bene_Prop_Fem +
-       I(Bene_Prop_Fem^2) +
-       Bene_Prop_White,
-   data = gm2019)
-
-# Not statsig different, so remove squared prop white
-anova(m5, m8, test = "Chisq")
-
-```
-
 <br>
 
 ***
 
 ### Final model
 
-At this point I'm proposing the model below as the final model. I've simplified where possible by removing higher-order terms that don't improve model fit. All remaining terms are statistically significant.
+The final model (*m5*) is shown below. All higher order terms that did not improve model fit have been removed. All remaining terms except for Prscrbr_RUCA_fct8 are statistically significant.
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
@@ -1704,9 +1687,9 @@ summary(m5)
 
 ***
 
-## General medicine fits by year
+## Fits by year
 
-I used the final model terms to fit a series of models---one per year---to general medicine data. Below I show residual and fit plots for each model. Residuals for each year appear to be randomly distributed. R-squared values range from 0.14 to 0.20.
+The final model specification was used to fit a series of models---one per year---to data from general medicine providers. Residuals plots and r-squared values for each model are provided below. Residuals for each year appear to be randomly distributed. R-squared values range from 0.14 to 0.20.
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
@@ -1743,29 +1726,30 @@ by_year_gm <- map(years, function(year) {
         geom_point(alpha = 0.2) +
         labs(title = paste(year, type),
              subtitle = paste0("N = ", nrow(data), ", r-squared = ", rsq),
-             x = "Fitted log(Claims/1K Beneficiaries)",
-             y = "Residual\nlog(Claims/1K Beneficiaries)")
-    fit_plot <- tibble(observed = observed, fitted = fitted) %>%
-        ggplot(aes(x = fitted, y = observed)) +
-        geom_point(alpha = 0.2) +
-        geom_abline(intercept = 0, slope = 1, color = "blue", size = 0.2) +
-        scale_x_continuous(limits = c(min_axis, max_axis)) +
-        scale_y_continuous(limits = c(min_axis, max_axis)) +
-        labs(title = paste(year, type),
-             subtitle = paste0("N = ", nrow(data), ", r-squared = ", rsq),
-             x = "Fitted log(Claims/1K Beneficiaries)",
-             y = "Observed\nlog(Claims/1K Beneficiaries)")
-    fit_list = list(resid = resid_plot, fit = fit_plot)
-    fit_list
+             x = "Fitted log(Claims per 1K Beneficiaries)",
+             y = "Residual\nlog(Claims\nper 1K Beneficiaries)")
+    # fit_plot <- tibble(observed = observed, fitted = fitted) %>%
+    #     ggplot(aes(x = fitted, y = observed)) +
+    #     geom_point(alpha = 0.2) +
+    #     geom_abline(intercept = 0, slope = 1, color = "blue", size = 0.2) +
+    #     scale_x_continuous(limits = c(min_axis, max_axis)) +
+    #     scale_y_continuous(limits = c(min_axis, max_axis)) +
+    #     labs(title = paste(year, type),
+    #          subtitle = paste0("N = ", nrow(data), ", r-squared = ", rsq),
+    #          x = "Fitted log(Claims/1K Beneficiaries)",
+    #          y = "Observed\nlog(Claims/1K Beneficiaries)")
+    # fit_list = list(resid = resid_plot, fit = fit_plot)
+    # fit_list
+    resid_plot
 })
 names(by_year_gm) <- years
 by_year_gm
 
 ```
 
-## General medicine coefficients by year
+## Coefficients by year
 
-The figure below indicates that coefficients for the final model predictors are remarkably stable across different years of data.
+The figure below indicates that coefficients for models fit to general medicine data are relatively stable across years.
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.height = 6, fig.width = 10}
 
@@ -1813,9 +1797,10 @@ by_year_gm_coef %>%
 
 ```
 
-## 2019 fits by provider type
 
-```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+## 2019 fits by provider type
 
 # 2019 dataset
 p2019 <- p3 %>%
@@ -1873,15 +1858,10 @@ by_type_2019
 
 ```
 
-<br>
 
-***
+```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 ## General medicine coefficients for 2019
-
-<br>
-
-```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # 2019 general medicine data
 gm2019 <- gm %>%
@@ -1918,21 +1898,22 @@ m1 <- lm(log_claims_1k ~ 1 +
        Bene_Prop_Fem +
        Bene_Prop_White,
    data = gm2019)
-summary(m1)
+# summary(m1)
 
 # Full model, based on what we saw in univarite plots
 
 ```
 
-<br>
 
-***
+```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.height = 8, fig.width = 8}
 
-## 2019 coefficients by provider type
-
-Coefficients show some variability across provider types for models fit to 2019 data.
-
-```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.height = 8, fig.width = 8}
+# <br>
+# 
+# ***
+# 
+# ## 2019 coefficients by provider type
+# 
+# Coefficients show some variability across provider types for models fit to 2019 data.
 
 # Table of coefficients
 by_type_2019_coef <- map_dfr(provider_types, function(type) {
@@ -1972,25 +1953,20 @@ by_type_2019_coef %>%
 
 ***
 
-# 2019 Maps
+## Maps
 
-All maps show observed/expected antibiotic claims by Idaho county for 2019. Lighter colors represent more claims than expected after controlling for model covariates; darker colors represent fewer claims than expected. Gray indicates no data.
+### Observed
 
-## General medicine providers
+This map shows county-related differences in anbitiotic prescribing rates. Lighter colors represent higher prescribing rates (claims per 1K beneficiaries).
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-# Read in address info
-# address_county <- read_feather("Address-query-county bank.feather")
-
-# Loop over general medicine to fit models by year
 fit_gm_year <- map_dfr(years, function(year) {
     data <- gm %>%
         filter(Year == !!year,
                Prscrbr_County != "Not ID")
     fit <- lm(log_claims_1k ~ 1 +
-       Prscrbr_RUCA +
-       I(Prscrbr_RUCA^2) +
+       Prscrbr_RUCA_fct +
        Prscrbr_Gndr +
        Bene_Avg_Risk_Scre +
        I(Bene_Avg_Risk_Scre^2) +
@@ -2011,16 +1987,19 @@ county_yr_oe <- fit_gm_year %>%
     filter(Prscrbr_County != "Not ID") %>%
     mutate(oe = claims_1k / fitted_claims_1k) %>%
     group_by(Year, Prscrbr_County) %>%
-    summarize(N = sum(!is.na(oe)),
-              mean_oe = mean(oe, na.rm = TRUE), .groups = "drop")
+    summarize(n_oe = sum(!is.na(oe)),
+              mean_oe = mean(oe, na.rm = TRUE),
+              n_o = sum(!is.na(claims_1k)),
+              mean_o = mean(claims_1k, na.rm = TRUE), .groups = "drop")
 
 # Get county shapes and join in OEs. This data structure can have NAs in the mean column, but if there are NAs in any other columns it will cause the county to not be plotted, rather than being plotted gray (no data).
 counties_sf <- counties(state = "ID", cb = FALSE) %>%
     left_join(county_yr_oe %>%
                   filter(Year == 2019) %>%
-                  select(NAMELSAD = Prscrbr_County, mean_oe, N),
+                  select(NAMELSAD = Prscrbr_County, n_oe, mean_oe, n_o, mean_o),
               by = "NAMELSAD") %>%
-    mutate(N = if_else(is.na(N), 0L, N),
+    mutate(n_oe = if_else(is.na(n_oe), 0L, n_oe),
+           n_o = if_else(is.na(n_o), 0L, n_o),
            County = NAME)
 
 # US county shapes
@@ -2033,14 +2012,11 @@ df <- read.csv(
     as_tibble() %>%
     select(fips)
 
-# Table of Idaho county FIPS, county names, log(O/E).
-# NOTE: Better if I get this info from counties JSON. Then I don't need to use
-# tigris at all.
 df2 <- tibble(fips = counties_sf$COUNTYFP,
               state = counties_sf$STATEFP,
               county = counties_sf$NAME,
-              mean = counties_sf$mean_oe,
-              N = counties_sf$N) %>%
+              mean = counties_sf$mean_o,
+              N = counties_sf$n_o) %>%
     mutate(fips = paste0(state, fips)) %>%
     select(fips, county, state, mean, N)
 
@@ -2050,7 +2026,7 @@ df3 <- df %>%
     mutate(hover_text = paste0(
         county, "<br>",
         "N = ", N, "<br>",
-        "O/E = ", round(mean, digits = 2)),
+        "Claims/1K  = ", round(mean, digits = 2)),
         NA_trace = if_else(is.na(mean) & state == "16", 1L, NA_integer_))
 
 # Figure
@@ -2084,7 +2060,7 @@ plot_ly() %>%
         showscale = FALSE,
         marker = list(line = list(width = 0),
                       opacity = 0.5)) %>%
-    colorbar(title = "Observed/Expected",
+    colorbar(title = "Observed\nClaims per 1K\nBeneficiaries",
              outlinewidth = 0,
              thickness = 30) %>%
     plotly::layout(mapbox = list(
@@ -2093,3 +2069,391 @@ plot_ly() %>%
         center = list(lon = -114, lat = 45.6)))
 
 ```
+
+<br>
+
+***
+
+### Observed/ Expected
+
+This map shows county-related differences in antibiotic prescribing rates after controlling for provider gender and rurality, and beneficiary age, health status, proportion female, and proportion white.
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Read in address info
+# address_county <- read_feather("Address-query-county bank.feather")
+
+# Loop over general medicine to fit models by year
+
+# Table of Idaho county FIPS, county names, log(O/E).
+# NOTE: Better if I get this info from counties JSON. Then I don't need to use
+# tigris at all.
+df2 <- tibble(fips = counties_sf$COUNTYFP,
+              state = counties_sf$STATEFP,
+              county = counties_sf$NAME,
+              mean = counties_sf$mean_oe,
+              N = counties_sf$n_oe) %>%
+    mutate(fips = paste0(state, fips)) %>%
+    select(fips, county, state, mean, N)
+
+# Join Idaho-specific info to df--the table with all US county FIPS
+df3 <- df %>%
+    left_join(df2, by = "fips") %>%
+    mutate(hover_text = paste0(
+        county, "<br>",
+        "N = ", N, "<br>",
+        "O/E Claims/1K = ", round(mean, digits = 2)),
+        NA_trace = if_else(is.na(mean) & state == "16", 1L, NA_integer_))
+
+# Figure
+plot_ly() %>%
+    
+    # Trace for counties with defined O/E
+    add_trace(
+        type = "choroplethmapbox",
+        geojson = counties,
+        locations = df3$fips,
+        z = df3$mean,
+        zmin = min(df3$mean),
+        zmax = max(df3$mean),
+        text = df3$hover_text,
+        hoverinfo = "text",
+        colorscale = "Viridis",
+        marker = list(line = list(width = 0),
+                      opacity = 0.5)) %>%
+    
+    # Trace for counties with NA O/E
+    add_trace(
+        type = "choroplethmapbox",
+        geojson = counties,
+        locations = df3$fips,
+        z = df3$NA_trace,
+        text = df3$hover_text,
+        hoverinfo = "text",
+        
+        # Counties with missing values will be gray, but scale won't be shown
+        colorscale = "Greys",
+        showscale = FALSE,
+        marker = list(line = list(width = 0),
+                      opacity = 0.5)) %>%
+    colorbar(title = "Observed/Expected\nClaims per 1K\nBeneficiaries",
+             outlinewidth = 0,
+             thickness = 30) %>%
+    plotly::layout(mapbox = list(
+        style = "carto-positron",
+        zoom = 4.6,
+        center = list(lon = -114, lat = 45.6)))
+
+```
+
+# Emergency medicine
+
+```{r, eval = TRUE, echo = TRUE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Place names based on Google API
+places <- read_feather("Address-name bank.feather") %>%
+    select(place = name, dataset_address)
+
+# Emergency medicine providers, all years
+em <- p3 %>%
+    filter(Prscrbr_Type_Std == "Emergency Medicine")
+
+# 2019 emergency medicine with place names joined in
+em2019 <- em %>%
+    filter(Year == 2019) %>%
+    left_join(places, by = "dataset_address")
+    
+# Counts of emergency medicine places
+em2019 %>%
+    count(place) %>%
+    arrange(desc(n))
+
+# Add categorization of places. This is just a partial coding of the places that
+# occur more often. Could do more.
+em2019 <- em2019 %>%
+    mutate(org = case_when(
+        str_detect(place, "Luke") ~ "St. Luke's",
+        str_detect(place, "Alphonsus") ~ "St. Alphonsus",
+        str_detect(place, "Portneuf") ~ "Portneuf",
+        str_detect(place, "Kootenai") ~ "Kootenai",
+        str_detect(place, "EIRMC") ~ "EIRMC",
+        str_detect(place, "Joseph") ~ "St. Joseph",
+        str_detect(place, "Madison") ~ "Madison Memorial Hospital",
+        str_detect(place, "Bonner") ~ "Bonner General Health",
+        str_detect(place, "Boundary") ~ "Boundary Community Hospital",
+        str_detect(place, "Cassia") ~ "Cassia Regional Hospital",
+        TRUE ~ "Other"))
+
+# Orgs with >= 5 emergency medicine providers
+orgs <- em2019 %>%
+    count(org) %>%
+    arrange(desc(n)) %>%
+    filter(n >= 5,
+           org != "Other") %>%
+    pull(org)
+
+# Counts for largest orgs. There are only seven with >= 5 providers.
+em2019 %>%
+    filter(org %in% orgs) %>%
+    count(org) %>%
+    arrange(desc(n))
+
+# Visualize org diffs
+em2019 %>%
+    filter(org %in% orgs) %>%
+    ggplot(aes(x = org, y = log_claims_1k)) +
+    geom_boxplot() +
+    coord_flip()
+
+# Simple model indicates that no levels or org are different than baseline
+# (EIRMC).
+em1 <- lm(
+    log_claims_1k ~ 1 +
+        org,
+    data = em2019 %>%
+        filter(org %in% orgs))
+summary(em1)
+
+# Look at bivariate relationships
+# RUCA
+em2019 %>%
+    filter(org %in% orgs) %>%
+    ggplot(aes(x = Prscrbr_RUCA_fct, y = log_claims_1k)) +
+    geom_boxplot()
+
+# Provider gender
+em2019 %>%
+    filter(org %in% orgs) %>%
+    ggplot(aes(x = Prscrbr_Gndr, y = log_claims_1k)) +
+    geom_boxplot()
+
+# Bene HCC. Maybe squared and cubed terms
+em2019 %>%
+    filter(org %in% orgs) %>%
+    ggplot(aes(x = Bene_Avg_Risk_Scre, y = log_claims_1k)) +
+    geom_point(alpha = 0.2) +
+    geom_smooth()
+
+# Bene age. Maybe squared and cubed terms
+em2019 %>%
+    filter(org %in% orgs) %>%
+    ggplot(aes(x = Bene_Avg_Age, y = log_claims_1k)) +
+    geom_point(alpha = 0.2) +
+    geom_smooth()
+
+# Bene prop female. Squared term
+em2019 %>%
+    filter(org %in% orgs) %>%
+    ggplot(aes(x = Bene_Prop_Fem, y = log_claims_1k)) +
+    geom_point(alpha = 0.2) +
+    geom_smooth()
+
+# Bene prop white. Squared term
+em2019 %>%
+    filter(org %in% orgs) %>%
+    ggplot(aes(x = Bene_Prop_White, y = log_claims_1k)) +
+    geom_point(alpha = 0.2) +
+    geom_smooth()
+
+# Full model
+em1 <- lm(log_claims_1k ~ 1 +
+       org +
+       Prscrbr_RUCA_fct +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Avg_Age +
+       I(Bene_Avg_Age^2) +
+       I(Bene_Avg_Age^3) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White +
+       I(Bene_Prop_White^2),
+   data = em2019 %>%
+       filter(org %in% orgs))
+summary(em1)
+
+# Evidence to drop cubed age
+em2 <- lm(log_claims_1k ~ 1 +
+       org +
+       Prscrbr_RUCA_fct +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Avg_Age +
+       I(Bene_Avg_Age^2) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White +
+       I(Bene_Prop_White^2),
+   data = em2019 %>%
+       filter(org %in% orgs))
+anova(em1, em2, test = "Chisq")
+
+# Evidence to retain cubed HCC
+em3 <- lm(log_claims_1k ~ 1 +
+       org +
+       Prscrbr_RUCA_fct +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       Bene_Avg_Age +
+       I(Bene_Avg_Age^2) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White +
+       I(Bene_Prop_White^2),
+   data = em2019 %>%
+       filter(org %in% orgs))
+anova(em2, em3, test = "Chisq")
+
+# Evidence to drop white squared
+em4 <- lm(log_claims_1k ~ 1 +
+       org +
+       Prscrbr_RUCA_fct +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Avg_Age +
+       I(Bene_Avg_Age^2) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White,
+   data = em2019 %>%
+       filter(org %in% orgs))
+anova(em2, em4, test = "Chisq")
+
+# Evidence to retain female squared
+em5 <- lm(log_claims_1k ~ 1 +
+       org +
+       Prscrbr_RUCA_fct +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Avg_Age +
+       I(Bene_Avg_Age^2) +
+       Bene_Prop_Fem +
+       Bene_Prop_White,
+   data = em2019 %>%
+       filter(org %in% orgs))
+anova(em4, em5, test = "Chisq")
+
+# Evidence to drop squared age
+em6 <- lm(log_claims_1k ~ 1 +
+       org +
+       Prscrbr_RUCA_fct +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Avg_Age +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White,
+   data = em2019 %>%
+       filter(org %in% orgs))
+anova(em4, em6, test = "Chisq")
+
+# Evidence to drop provider gender
+em7 <- lm(log_claims_1k ~ 1 +
+       org +
+       Prscrbr_RUCA_fct +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Avg_Age +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White,
+   data = em2019 %>%
+       filter(org %in% orgs))
+anova(em6, em7, test = "Chisq")
+
+# Evidence to drop org
+em8 <- lm(log_claims_1k ~ 1 +
+       Prscrbr_RUCA_fct +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Avg_Age +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White,
+   data = em2019 %>%
+       filter(org %in% orgs))
+anova(em7, em8, test = "Chisq")
+
+# Evidence to drop RUCA
+em9 <- lm(log_claims_1k ~ 1 +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Avg_Age +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White,
+   data = em2019 %>%
+       filter(org %in% orgs))
+anova(em8, em9, test = "Chisq")
+
+# Evidence to drop age
+em10 <- lm(log_claims_1k ~ 1 +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White,
+   data = em2019 %>%
+       filter(org %in% orgs))
+anova(em9, em10, test = "Chisq")
+
+# Evidenc to drop white
+em11 <- lm(log_claims_1k ~ 1 +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2),
+   data = em2019 %>%
+       filter(org %in% orgs))
+anova(em10, em11, test = "Chisq")
+
+# Check cubed HCC again. Evidence still indicates it should be kept.
+em12 <- lm(log_claims_1k ~ 1 +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2),
+   data = em2019 %>%
+       filter(org %in% orgs))
+anova(em11, em12, test = "Chisq")
+
+# Check squared fem again. Evidence still indicates it should be kept.
+em13 <- lm(log_claims_1k ~ 1 +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       Bene_Prop_Fem,
+   data = em2019 %>%
+       filter(org %in% orgs))
+anova(em11, em13, test = "Chisq")
+
+# Final model
+summary(em11)
+
+# Check residuals. Look okay
+tibble(fitted = fitted(em11),
+       residual = residuals(em11)) %>%
+    ggplot(aes (x = fitted, y = residual)) +
+    geom_point(alpha = 0.25)
+
+# Note that even though we dropped org from the final model it could still be
+# that orgs (e.g., St. Luke's versus St. Al's) matter in interaction with other
+# predictors.
+
+```
+
