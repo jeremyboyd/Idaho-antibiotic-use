@@ -1,0 +1,74 @@
+---
+title: "Untitled"
+author: "Jeremy Boyd"
+date: "6/7/2022"
+output:
+    powerpoint_presentation:
+        reference_doc: blank_template.pptx
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+
+
+
+
+
+
+
+
+## R Markdown
+
+This example shows how to create pptx output using Microsoft pptx templates. This slideshow is based on the "Blank Presentation" template. You can use any of the Microsoft templates or create your own.
+
+This is an R Markdown presentation. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+## Slide with Bullets
+
+- Bullet 1
+- Bullet 2
+- Bullet 3
+
+## Slide with R Output
+
+```{r cars, echo = TRUE}
+summary(cars)
+```
+
+## Slide with Plot
+
+```{r pressure}
+plot(pressure)
+```
+
+
+
+## Two Column Slide
+
+:::::: {.columns}
+::: {.column}
+
+Content of the left column.
+
+```{r pressure2}
+plot(pressure)
+```
+
+:::
+
+::: {.column}
+
+Content of the right column.
+
+```{r pressure3}
+plot(pressure)
+```
+
+:::
+::::::
+
+
+

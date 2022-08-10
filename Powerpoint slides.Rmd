@@ -1,0 +1,167 @@
+---
+title: "Idaho Antibiotic Use"
+author:
+    - Jeremy Boyd
+    - Karl Madaras-Kelly
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+    powerpoint_presentation:
+        reference_doc: blank_template.pptx
+---
+
+```{r setup, include=FALSE}
+
+# Problems with creating a powerpoint from Rmd
+# Doesn't allow you to change column widths in two-column slide.
+# Doesn't allow you to change table styling to automatically get something that's not the template default.
+# Feel like I if I did the powerpoint with Rmd it's be more of a pain because Karl wouldn't be able to edit it, and every time we did we'd have to redo a bunch of stuff that gets undone by re-knitting.
+
+knitr::opts_chunk$set(echo = FALSE)
+
+```
+
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Read in provider type bank
+p_types <- read_feather("Idaho provider type bank.feather") %>%
+    select(Prscrbr_Type, Std_Provider_Type)
+
+# Read in address-county info
+address_county <- read_feather("Address-query-county bank.feather")
+
+# By-provider dataset
+p <- read_feather("Idaho prescribers by provider data.feather") %>%
+    mutate(Bene_Prop_Fem = Bene_Feml_Cnt / Tot_Benes,
+           Bene_Prop_White = Bene_Race_Wht_Cnt / Tot_Benes,
+           Prscrbr_RUCA = floor(Prscrbr_RUCA),
+           Prscrbr_RUCA_fct = factor(Prscrbr_RUCA),
+           dataset_address = str_squish(
+                paste(Prscrbr_St1,
+                      Prscrbr_St2,
+                      Prscrbr_City,
+                      Prscrbr_State_Abrvtn,
+                      Prscrbr_Zip5))) %>%
+    
+    # Standardized prescriber types
+    left_join(p_types, by = c("Prscrbr_Type")) %>%
+    
+    # County info
+    left_join(address_county %>%
+                  select(dataset_address, county),
+              by = "dataset_address") %>%
+    select(Year = year,
+           Prscrbr_NPI,
+           Prscrbr_Type_Std = Std_Provider_Type,
+           Prscrbr_RUCA,
+           Prscrbr_RUCA_fct,
+           Prscrbr_Gndr,
+           Prscrbr_State_Abrvtn,
+           Prscrbr_County = county,
+           Antbtc_Tot_Clms,
+           Tot_Benes,
+           Bene_Avg_Age,
+           Bene_Avg_Risk_Scre,
+           Bene_Prop_Fem,
+           Bene_Prop_White,
+           dataset_address)
+
+```
+
+## Medicare Part D Datasets
+
+- Both have 2013-2019 data.
+- by-provider: one row per provider per year. Aggregate antibiotic claim counts.
+- by provider & drug: one row per provider per drug per year. 
+
+
+:::::: {.columns}
+::: {.column}
+
+By provider
+
+<br>
+
+- Bullet 1
+- Bullet 2
+- Bullet 3
+
+:::
+
+::: {.column}
+
+By provider & drug
+
+<br>
+
+- Bullet 1
+- Bullet 2
+- Bullet 3
+
+:::
+::::::
+
+
+
+
+## Example by-provider
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+set.seed(1)
+p %>%
+    filter(Year == 2019,
+           !is.na(Antbtc_Tot_Clms),
+           Antbtc_Tot_Clms != 0) %>%
+    sample_n(2) %>%
+    select(`Prv NPI` = Prscrbr_NPI,
+           `Prv Type` = Prscrbr_Type_Std,
+           `Prv Rural` = Prscrbr_RUCA_fct,
+           `Prv Gen` = Prscrbr_Gndr,
+           `N Ant Clms` = Antbtc_Tot_Clms,
+           `N Bens` = Tot_Benes,
+           `Ben HCC` = Bene_Avg_Risk_Scre,
+           `Ben Age` = Bene_Avg_Age,
+           `Ben Fem %` = Bene_Prop_Fem,
+           `Ben White %` = Bene_Prop_White) %>%
+    mutate(across(matches("%"), ~ . * 100),
+           across(matches("Age|Fem|White"), ~ round(., digits = 0)),
+           `Ben HCC` = round(`Ben HCC`, digits = 2),
+           across(everything(), ~ as.character(.))) %>%
+    kable()
+
+```
+
+
+## Slide with R Output
+
+```{r cars, echo = TRUE}
+summary(cars)
+
+```
+
+## Slide with Plot
+
+```{r pressure}
+plot(pressure)
+```
+
+## Two Column Slide
+
+:::::: {.columns}
+::: {.column}
+
+- Bullet 1
+- Bullet 2
+- Bullet 3
+
+:::
+
+::: {.column}
+
+```{r pressure3}
+plot(pressure)
+```
+
+:::
+::::::

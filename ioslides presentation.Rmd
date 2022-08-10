@@ -1,0 +1,1208 @@
+---
+title: "Idaho Antibiotic Use"
+author: Karl Madaras-Kelly & Jeremy Boyd
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+    ioslides_presentation:
+        widescreen: true
+        smaller: true
+        css: style2.css
+---
+
+```{r setup, include = FALSE}
+
+# Try custom CSS agaion!!!
+
+# For ioslides: need to get plain white background with no fade at bottom
+# https://stackoverflow.com/questions/35632032/configuring-ioslides-background-with-css
+# Doesn't seem to be using the custom css I'm specifying.
+# Kludgy fix is to specify a fully white background. Only problem is that this covers up the slide numbering.
+
+# Overall though, this looks like the best slide solution.
+
+# Problems with creating a powerpoint from Rmd
+# Doesn't allow you to change column widths in two-column slide.
+# Doesn't allow you to change table styling to automatically get something that's not the template default.
+# Feel like I if I did the powerpoint with Rmd it's be more of a pain because Karl wouldn't be able to edit it, and every time we did we'd have to redo a bunch of stuff that gets undone by re-knitting.
+
+knitr::opts_chunk$set(echo = FALSE)
+
+# Make default image type SVG
+knitr::opts_chunk$set(dev = "svg")
+
+```
+
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+###############################################################################
+#### Read in by-provider ####
+###############################################################################
+
+# Read in provider type bank
+p_types <- read_feather("Idaho provider type bank.feather") %>%
+    select(Prscrbr_Type, Std_Provider_Type)
+
+# Read in address-county info
+address_county <- read_feather("Address-query-county bank.feather") %>%
+    mutate(county = str_remove(county, " County"))
+
+# By-provider dataset
+p <- read_feather("Idaho prescribers by provider data.feather") %>%
+    rename(Year = year) %>%
+    mutate(Prscrbr_RUCA = floor(Prscrbr_RUCA),
+           Prscrbr_RUCA_fct = factor(Prscrbr_RUCA),
+           Prscrbr_Fem = if_else(Prscrbr_Gndr == "F", 1L, 0L),
+           Bene_Prop_Fem = Bene_Feml_Cnt / Tot_Benes,
+           Bene_Prop_White = Bene_Race_Wht_Cnt / Tot_Benes,
+           dataset_address = str_squish(
+                paste(Prscrbr_St1,
+                      Prscrbr_St2,
+                      Prscrbr_City,
+                      Prscrbr_State_Abrvtn,
+                      Prscrbr_Zip5)),
+           claims_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000),
+           log_claims_1k = log(claims_1k)) %>%
+    
+    # Standardized prescriber types
+    left_join(p_types, by = c("Prscrbr_Type")) %>%
+    
+    # County info
+    left_join(address_county %>%
+                  select(dataset_address, county),
+              by = "dataset_address")
+
+# Limit to rows with > 10 antibiotic claims and beneficiaries
+p2 <- p %>%
+    filter(!is.na(Antbtc_Tot_Clms),
+           Antbtc_Tot_Clms > 10,
+           !is.na(Tot_Benes))
+
+# Exclude missing values of Bene_Prop_Fem, Bene_Prop_White, Prscrbr_RUCA
+p3 <- p2 %>%
+    filter(!is.na(Bene_Prop_Fem),
+           !is.na(Bene_Prop_White),
+           !is.na(Prscrbr_RUCA)) %>%
+    select(Year,
+           Prscrbr_NPI,
+           Prscrbr_Type_Std = Std_Provider_Type,
+           Prscrbr_RUCA,
+           Prscrbr_RUCA_fct,
+           Prscrbr_Gndr,
+           Prscrbr_Fem,
+           Prscrbr_State_Abrvtn,
+           Prscrbr_County = county,
+           Antbtc_Tot_Clms,
+           Tot_Benes,
+           Bene_Avg_Age,
+           Bene_Avg_Risk_Scre,
+           Bene_Feml_Cnt,
+           Bene_Prop_Fem,
+           Bene_Prop_White,
+           Bene_Race_Wht_Cnt,
+           claims_1k,
+           log_claims_1k,
+           dataset_address)
+
+###############################################################################
+#### Read in by-provider-and-drug ####
+###############################################################################
+
+# Names and class coding of generic drugs
+generics <- read_feather("Generic drug bank.feather")
+
+# Names of drug classes
+drug_classes <- names(generics)[2:length(names(generics))]
+
+# Read in by-provider-and-drug dataset
+pd <- read_feather("Idaho prescribers by provider & drug data.feather") %>%
+    
+    # Join in coding for drug classes from generics
+    left_join(generics, by = "Gnrc_Name") %>%
+    select(Prscrbr_NPI, Year = year, Gnrc_Name, Tot_Clms, Antibiotic:Other)
+
+# Summarize total claims per provider per year per drug class
+pd2 <- map_dfr(drug_classes, function(class) {
+    message(paste0("Getting claim data for class ", class, "..."))
+    pd %>%
+        filter(!!sym(class) == 1) %>%
+        group_by(Prscrbr_NPI, Year) %>%
+        summarize(
+            n_drugs = sum(!is.na(Tot_Clms)),
+            tot_clms = sum(Tot_Clms, na.rm = TRUE), .groups = "drop") %>%
+        mutate(class = class) }) %>%
+    
+    # Join in Tot_Benes from p
+    left_join(p %>%
+                  select(Year , Prscrbr_NPI, Tot_Benes),
+              by = c("Year", "Prscrbr_NPI")) %>%
+    
+    # Compute claims 1k
+    mutate(claims_1k = tot_clms / (Tot_Benes / 1000),
+           log_claims_1k = log(claims_1k))
+
+```
+
+## Medicare Part D datasets
+
+<div class="columns-2">
+
+**Provider**: One row per provider per year
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# By-provider example rows
+p3 %>%
+    select(Year, Prscrbr_NPI, Antbtc_Tot_Clms, Tot_Benes) %>%
+    filter(Prscrbr_NPI == "1295735769",
+           Year %in% c(2019, 2018)) %>%
+    mutate(across(where(is.numeric), ~ round(., digits = 2))) %>%
+    datatable(rownames = FALSE,
+              options = list(dom = "t"))
+
+```
+
+- Provider data: NPI, name, credentials, address, gender, rurality & provider type.
+- Beneficiary data: number of beneficiaries, average age & HCC risk score, demographic counts.
+- Claims data: aggregate antibiotic claim counts.
+
+**Provider & drug**: One row per provider per drug per year
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# By-provider-and-drug example rows
+pd2 %>%
+    select(Year, Prscrbr_NPI, Drug = class, Tot_Clms = tot_clms) %>%
+    filter(Prscrbr_NPI == "1295735769",
+           Year %in% c(2019, 2018),
+           !Drug %in% c("Antibiotic", "Macrolide")) %>%
+    arrange(desc(Year)) %>%
+    datatable(rownames = FALSE,
+              options = list(dom = "t"))
+
+```
+
+<div class="columns-2">
+
+# Descriptive statistics
+
+## Providers by year
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Provider table by year
+p3 %>%
+    compute_sum_p(group = "Year") %>%
+    provider_table() %>%
+    datatable(
+        options = list(dom = "t"),
+        rownames = FALSE,
+        colnames = c(
+            "Year",
+            "Provider Count",
+            "% Female",
+            "Mean (SD) RUCA"))
+
+```
+
+## 2019 providers by type
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Provider table by year
+p3 %>%
+    filter(Year == 2019) %>%
+    rename(`Provider Type` = Prscrbr_Type_Std) %>%
+    compute_sum_p(group = "Provider Type") %>%
+    provider_table() %>%
+    datatable(
+        options = list(dom = "t"),
+        rownames = FALSE,
+        colnames = c(
+            "Provider Type",
+            "Provider Count",
+            "% Female",
+            "Mean (SD) RUCA"))
+
+```
+
+## Beneficiaries by year
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Beneficiary table by year
+p3 %>%
+    compute_sum_p(group = "Year") %>%
+    beneficiary_table() %>%
+    datatable(
+        options = list(dom = "t",
+        autowidth = TRUE),
+        rownames = FALSE,
+        colnames = c(
+            "Year",
+            "Mean (SD) Beneficiary Count",
+            "Range Beneficiary Count",
+            "Mean (SD) Beneficiary Age",
+            "Mean (SD) Beneficiary HCC Score",
+            "Range Beneficiary HCC Score",
+            "Mean Beneficiary % Female",
+            "Mean Beneficiary % White"))
+
+```
+
+## 2019 beneficiaries by provider type
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# 2019 beneficiaries by provider type
+p3 %>%
+    filter(Year == 2019) %>%
+    rename(`Provider Type` = Prscrbr_Type_Std) %>%
+    compute_sum_p(group = "Provider Type") %>%
+    beneficiary_table() %>%
+    datatable(
+        options = list(dom = "t",
+                       autowidth = TRUE,
+                       columnDefs = list(
+                           list(width = '140px', targets = c(0, 1)))),
+        rownames = FALSE,
+        colnames = c(
+            "Provider Type",
+            "Mean (SD) Beneficiary Count",
+            "Range Beneficiary Count",
+            "Mean (SD) Beneficiary Age",
+            "Mean (SD) Beneficiary HCC Score",
+            "Range Beneficiary HCC Score",
+            "Mean Beneficiary % Female",
+            "Mean Beneficiary % White"))
+
+```
+
+## Antibiotic use by year
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Antibiotic use by year
+p3 %>%
+    compute_sum_p(group = "Year") %>%
+    use_table() %>%
+    datatable(options = list(dom = "t",
+                       autowidth = TRUE,
+                       columnDefs = list(
+                           list(width = '100px', targets = 1))),
+              rownames = FALSE,
+              colnames = c(
+                  "Year",
+                  "Mean (SD) Claims",
+                  "Mean (SD) Beneficiary Count",
+                  "Mean (SD) Claims / 1K Beneficiaries",
+                  "95% CI Mean Claims / 1K Beneficiaries",
+                  "Range Claims / 1K Beneficiaries"))
+
+```
+
+## 2019 antibiotic use by provider type
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Antibiotic use by year
+p3 %>%
+    filter(Year == 2019) %>%
+    rename(`Provider Type` = Prscrbr_Type_Std) %>%
+    compute_sum_p(group = "Provider Type") %>%
+    use_table() %>%
+    datatable(options = list(dom = "t",
+                             autowidth = TRUE,
+                       columnDefs = list(
+                           list(width = '130px', targets = 0))),
+              rownames = FALSE,
+              colnames = c(
+                  "Provider Type",
+                  "Mean (SD) Claims",
+                  "Mean (SD) Beneficiary Count",
+                  "Mean (SD) Claims / 1K Beneficiaries",
+                  "95% CI Mean Claims / 1K Beneficiaries",
+                  "Range Claims / 1K Beneficiaries"))
+
+```
+
+## Use trends
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 10, cache = TRUE}
+
+# Compute average percent change across years for each class
+pct_change <- pd2 %>%
+    group_by(class, Year) %>%
+    summarize(n_prscrbr = sum(!is.na(claims_1k)),
+              mean_clms_1k = mean(claims_1k, na.rm = TRUE),
+              .groups = "drop") %>%
+    pivot_wider(matches("class"), names_from = "Year",
+                values_from = "mean_clms_1k") %>%
+    mutate(change13_14 = (`2014` - `2013`) / `2013` * 100,
+           change14_15 = (`2015` - `2014`) / `2014` * 100,
+           change15_16 = (`2016` - `2015`) / `2015` * 100,
+           change16_17 = (`2017` - `2016`) / `2016` * 100,
+           change17_18 = (`2018` - `2017`) / `2017` * 100,
+           change18_19 = (`2019` - `2018`) / `2018` * 100) %>%
+    select(-(`2013`:`2019`)) %>%
+    pivot_longer(matches("change"), names_to = "years",
+                 values_to = "pct_change") %>%
+    group_by(class) %>%
+    summarize(n = sum(!is.na(pct_change)),
+              mean_pct_chg_yr = mean(pct_change, na.rm = TRUE),
+              .groups = "drop") %>%
+    arrange(mean_pct_chg_yr)
+
+# Compute year effects for each class
+year_effects <- map_dfr(drug_classes, function(class) {
+    data <- pd2 %>% filter(class == !!class)
+    lm(log_claims_1k ~ Year,
+       data = data) %>%
+    tidy() %>%
+    mutate(class = !!class) }) %>%
+    filter(term == "Year") %>%
+    arrange(p.value)
+
+# Compute mean claims 1k for each class
+clms_1k_tab <- pd2 %>%
+    group_by(class) %>%
+    summarize(clms_1k = mean(claims_1k, na.rm = TRUE), .groups = "drop") %>%
+    arrange(desc(clms_1k))
+
+# Function to compute mean
+mean_fun <- function(data, indices) {
+    d <- data[indices]
+    return(mean(d, na.rm = TRUE))
+    }
+
+# Cross years & classes
+year_class <- expand_grid(year = unique(pd2$Year),
+                          class = drug_classes)
+
+# Compute bootstrapped 95% CI for mean(claims_1k) for each combination of year
+# and class.
+year_class_ci <- map2_dfr(year_class$class, year_class$year,
+                          function(class, year) {
+    data <- pd2 %>%
+        filter(class == !!class,
+               Year == !!year)
+    reps <- boot(data$claims_1k, statistic = mean_fun, R = 1000)
+    ci <- boot.ci(reps, conf = 0.95, type = "basic")
+    tibble(class = !!class,
+           Year = !!year,
+           lower = ci$basic[4],
+           upper = ci$basic[5])
+})
+
+# Figure
+fig_data <- pd2 %>%
+    group_by(class, Year) %>%
+    summarize(mean = mean(claims_1k, na.rm = TRUE), .groups = "drop") %>%
+    
+    # Join in lower & upper CIs
+    left_join(year_class_ci, by = c("Year", "class")) %>%
+    
+    # Join in percent change
+    left_join(pct_change %>%
+                  select(class, mean_pct_chg_yr), by = "class") %>%
+    
+    # Join in variable to sort levels of claims on
+    left_join(clms_1k_tab, by = "class") %>%
+    
+    # Join in p-values
+    left_join(year_effects %>%
+                  select(class, p.value), by = "class") %>%
+    
+    mutate(p_label = if_else(p.value < 0.05,
+                             paste0(
+                                 "\n",
+                                 format(p.value,
+                                        scientific = TRUE,
+                                        digits = 3)),
+                             ""),
+           facet_label = paste0(class, "\n",
+                                round(mean_pct_chg_yr, digits = 2), "%",
+                                p_label),
+           
+           # Order levels of facet_label
+           facet_label = fct_reorder(facet_label, -clms_1k))
+
+# Regexp to match different groups of drugs
+first_four <- paste0(clms_1k_tab$class[1:4], collapse = "|")
+second_four <- paste0(clms_1k_tab$class[6:9], collapse = "|")
+last_two <- paste0(clms_1k_tab$class[10:11], collapse = "|")
+
+# First five
+fig_data %>%
+    filter(str_detect(facet_label, first_four)) %>%
+    ggplot(aes(x = Year, y = mean, ymin = lower, ymax = upper,
+               group = facet_label, color = facet_label, fill = facet_label)) +
+    geom_ribbon(alpha = 0.2, linetype = 0) +
+    geom_line() +
+    scale_x_continuous(breaks = seq(2013, 2019, 2)) +
+    scale_y_continuous(limits = c(0, 500)) +
+    facet_wrap(~ facet_label, ncol = 5) +
+    labs(x = "Year",
+         y = "Claims/1K\nbeneficiaries",
+         color = "Class") +
+    theme(legend.position = "none",
+          
+          # Figure gets slightly cut off on the right in ioslides, so add bit to
+          # the figure margins.
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm"))
+
+```
+
+## Use trends
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 10, cache = TRUE}
+
+# Second five
+fig_data %>%
+    filter(str_detect(facet_label, second_four)) %>%
+    ggplot(aes(x = Year, y = mean, ymin = lower, ymax = upper,
+               group = facet_label, color = facet_label, fill = facet_label)) +
+    geom_ribbon(alpha = 0.2, linetype = 0) +
+    geom_line() +
+    scale_x_continuous(breaks = seq(2013, 2019, 2)) +
+    scale_y_continuous(limits = c(0, 500)) +
+    facet_wrap(~ facet_label, ncol = 5) +
+    labs(x = "Year",
+         y = "Claims/1K\nbeneficiaries",
+         color = "Class") +
+    theme(legend.position = "none",
+          
+          # Figure gets slightly cut off on the right in ioslides, so add bit to
+          # the figure margins.
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm"))
+
+```
+
+## Use trends
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 6, cache = TRUE}
+
+# Second five
+fig_data %>%
+    filter(str_detect(facet_label, last_two)) %>%
+    ggplot(aes(x = Year, y = mean, ymin = lower, ymax = upper,
+               group = facet_label, color = facet_label, fill = facet_label)) +
+    geom_ribbon(alpha = 0.2, linetype = 0) +
+    geom_line() +
+    scale_x_continuous(breaks = seq(2013, 2019, 2)) +
+    scale_y_continuous(limits = c(0, 500)) +
+    facet_wrap(~ facet_label, ncol = 5) +
+    labs(x = "Year",
+         y = "Claims/1K\nbeneficiaries",
+         color = "Class") +
+    theme(legend.position = "none",
+          
+          # Figure gets slightly cut off on the right in ioslides, so add bit to
+          # the figure margins.
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm"))
+
+```
+
+# 2019 general medicine providers
+
+## Methods
+
+- Analysis based on the provider dataset.
+- Used examination of bivariate relationships between all possible predictors and the outcome---log(claims/1K beneficiaries)---to define eight candidate models.
+- Selected the final, best-fit model based on AIC.
+- Validated the final model on 2019 training, and 2013-2018 test data.
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# General medicine only
+gm <- p3 %>%
+    filter(Prscrbr_Type_Std == "General Medicine")
+
+# 2019 general medicine providers
+gm2019 <- gm %>%
+    filter(Prscrbr_Type_Std == "General Medicine",
+           Year == 2019)
+
+# Model
+m5 <- lm(log_claims_1k ~ 1 +
+       Prscrbr_RUCA_fct +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Avg_Age +
+       I(Bene_Avg_Age^2) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White,
+   data = gm2019)
+
+# m5 summary
+m5.sum <- m5 %>%
+    tidy() %>%
+    mutate(across(matches("std.error|statistic"), ~ round(., digits = 2)),
+           estimate = round(estimate, digits = 3),
+           p.value = format(p.value, digits = 2, nsmall = 2, scientific = TRUE))
+
+```
+
+## Training fit
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Fit separate models by year using the same set of predictors, collect fitted
+# values.
+years <- gm %>% pull(Year) %>% unique()
+fit_gm_year <- map_dfr(years, function(year) {
+    data <- gm %>%
+        filter(Year == !!year,
+               Prscrbr_County != "Not ID")
+    fit <- lm(log_claims_1k ~ 1 +
+       Prscrbr_RUCA_fct +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Avg_Age +
+       I(Bene_Avg_Age^2) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White,
+   data = data)
+    data %>%
+        mutate(fitted_log_claims_1k = fitted(fit),
+               fitted_claims_1k = exp(fitted_log_claims_1k))
+})
+
+# General medicine 2019 only
+gm2019 <- fit_gm_year %>%
+    filter(Year == 2019)
+
+# Figure of fitted versus observed values
+min_axis <- if_else(min(gm2019$fitted_log_claims_1k) < min(gm2019$log_claims_1k),
+                    min(gm2019$fitted_log_claims_1k), min(gm2019$log_claims_1k))
+max_axis <- if_else(max(gm2019$fitted_log_claims_1k) > max(gm2019$log_claims_1k),
+                    max(gm2019$fitted_log_claims_1k), max(gm2019$log_claims_1k))
+rsq <- format(glance(m5) %>% pull(r.squared), digits = 2, nsmall = 2)
+gm2019 %>%
+    ggplot(aes(x = fitted_log_claims_1k, y = log_claims_1k)) +
+    geom_point(alpha = 0.2) +
+    geom_abline(intercept = 0, slope = 1, color = "blue", size = 0.2) +
+    scale_x_continuous(limits = c(min_axis, max_axis)) +
+    scale_y_continuous(limits = c(min_axis, max_axis)) +
+    labs(subtitle = paste0("N = ", nrow(gm2019), ", r-squared = ", rsq),
+         x = "Fitted prescribing rate",
+         y = "Observed\nprescribing\nrate")
+
+```
+
+## Test fit
+
+<div class="columns-2">
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 3.75, fig.height = 4, cache = TRUE}
+
+# Validate GM model by training on 2019, testing on 2013-2018. Want to compare
+# m5 (model preferred by log-likelihood & AIC comparison) versus m8 (linear
+# terms only).
+
+# Training and test sets
+train <- p3 %>%
+    filter(Year == 2019,
+           Prscrbr_Type_Std == "General Medicine")
+test <- p3 %>% filter(Year != 2019, Prscrbr_Type_Std == "General Medicine")
+
+# Separate test sets per year
+test_2018 <- p3 %>% filter(Year == 2018, Prscrbr_Type_Std == "General Medicine")
+test_2017 <- p3 %>% filter(Year == 2017, Prscrbr_Type_Std == "General Medicine")
+test_2016 <- p3 %>% filter(Year == 2016, Prscrbr_Type_Std == "General Medicine")
+test_2015 <- p3 %>% filter(Year == 2015, Prscrbr_Type_Std == "General Medicine")
+test_2014 <- p3 %>% filter(Year == 2014, Prscrbr_Type_Std == "General Medicine")
+test_2013 <- p3 %>% filter(Year == 2013, Prscrbr_Type_Std == "General Medicine")
+
+# Model specification & engine
+lm_model <- linear_reg() %>%
+    set_engine("lm")
+
+# Fit m5
+fit_m5 <- lm_model %>%
+    fit(log_claims_1k ~ 1 +
+       # Prscrbr_RUCA_fct +
+       Prscrbr_RUCA +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Avg_Age +
+       I(Bene_Avg_Age^2) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White,
+       data = train)
+
+# Fit m8
+fit_m8 <- lm_model %>%
+    fit(log_claims_1k ~ 1 +
+       # Prscrbr_RUCA_fct +
+       Prscrbr_RUCA +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       Bene_Avg_Age +
+       Bene_Prop_Fem +
+       Bene_Prop_White,
+       data = train)
+
+# Store test set predictions from each model
+test$m5_pred <- predict(fit_m5, new_data = test) %>% pull(.pred)
+test$m8_pred <- predict(fit_m8, new_data = test) %>% pull(.pred)
+
+# Predictions per year
+test_2018$m5_pred <- predict(fit_m5, new_data = test_2018) %>% pull(.pred)
+test_2018$m8_pred <- predict(fit_m8, new_data = test_2018) %>% pull(.pred)
+test_2017$m5_pred <- predict(fit_m5, new_data = test_2017) %>% pull(.pred)
+test_2017$m8_pred <- predict(fit_m8, new_data = test_2017) %>% pull(.pred)
+test_2016$m5_pred <- predict(fit_m5, new_data = test_2016) %>% pull(.pred)
+test_2016$m8_pred <- predict(fit_m8, new_data = test_2016) %>% pull(.pred)
+test_2015$m5_pred <- predict(fit_m5, new_data = test_2015) %>% pull(.pred)
+test_2015$m8_pred <- predict(fit_m8, new_data = test_2015) %>% pull(.pred)
+test_2014$m5_pred <- predict(fit_m5, new_data = test_2014) %>% pull(.pred)
+test_2014$m8_pred <- predict(fit_m8, new_data = test_2014) %>% pull(.pred)
+test_2013$m5_pred <- predict(fit_m5, new_data = test_2013) %>% pull(.pred)
+test_2013$m8_pred <- predict(fit_m8, new_data = test_2013) %>% pull(.pred)
+
+# m5 has lower error (rmse & mae) and higher rsq than m8, indicating better
+# out-of-sample predictive accuracy when squared and cubed terms are included.
+# metrics(test, log_claims_1k, m5_pred)
+# metrics(test, log_claims_1k, m8_pred)
+
+# Per year metrics
+train_metrics <- bind_rows(
+    metrics(test_2018, log_claims_1k, m5_pred) %>%
+        mutate(Year = 2018, model = "m5"),
+    metrics(test_2018, log_claims_1k, m8_pred) %>%
+        mutate(Year = 2018, model = "m8"),
+    metrics(test_2017, log_claims_1k, m5_pred) %>%
+        mutate(Year = 2017, model = "m5"),
+    metrics(test_2017, log_claims_1k, m8_pred) %>%
+        mutate(Year = 2017, model = "m8"),
+    metrics(test_2016, log_claims_1k, m5_pred) %>%
+        mutate(Year = 2016, model = "m5"),
+    metrics(test_2016, log_claims_1k, m8_pred) %>%
+        mutate(Year = 2016, model = "m8"),
+    metrics(test_2015, log_claims_1k, m5_pred) %>%
+        mutate(Year = 2015, model = "m5"),
+    metrics(test_2015, log_claims_1k, m8_pred) %>%
+        mutate(Year = 2015, model = "m8"),
+    metrics(test_2014, log_claims_1k, m5_pred) %>%
+        mutate(Year = 2014, model = "m5"),
+    metrics(test_2014, log_claims_1k, m8_pred) %>%
+        mutate(Year = 2014, model = "m8"),
+    metrics(test_2013, log_claims_1k, m5_pred) %>%
+        mutate(Year = 2013, model = "m5"),
+    metrics(test_2013, log_claims_1k, m8_pred) %>%
+        mutate(Year = 2013, model = "m8")) %>%
+    filter(.metric != "mae") %>%
+    mutate(.metric = if_else(.metric == "rmse", "RMSE", "R-Squared"),
+           model = if_else(model == "m5", "Full", "Linear Only"))
+
+# R-squared figure
+train_metrics %>%
+    filter(.metric == "R-Squared") %>%
+    ggplot(aes(x = Year, y = .estimate, group = model, color = model)) +
+    geom_line() +
+    scale_x_continuous(breaks = seq(2013, 2018, 2)) +
+    scale_y_continuous(name = "R-Squared") +
+    scale_color_discrete(name = "Model") +
+    guides(color = "none")
+
+```
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 5, fig.height = 4, cache = TRUE}
+
+# RMSE figure
+train_metrics %>%
+    filter(.metric == "RMSE") %>%
+    ggplot(aes(x = Year, y = .estimate, group = model, color = model)) +
+    geom_line() +
+    scale_x_continuous(breaks = seq(2013, 2018, 2)) +
+    scale_y_continuous(name = "RMSE") +
+    scale_color_discrete(name = "Model")
+
+```
+
+</div>
+
+## Final model coefficients
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Final model coefficients
+m5.sum %>%
+    datatable(
+        rownames = FALSE,
+        colnames = c("Term", "Estimate", "SE", "t", "p"),
+        options = list(dom = "tp"))
+
+```
+
+## Standardized prescribing rate by provider
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Dotplot of OE ratios for 2019 general medicine
+gm2019 %>%
+    mutate(oe = claims_1k / fitted_claims_1k,
+           Prscrbr_NPI = fct_reorder(Prscrbr_NPI, -oe)) %>%
+    filter(oe < 6) %>%
+    ggplot(aes(x = Prscrbr_NPI, y = oe)) +
+    geom_point(color = "dodgerblue", alpha = .2) +
+    geom_hline(yintercept = 1, linetype = "dashed", size = .2) +
+    annotate(geom = "text", x = 780, y = 3.7,
+             label = paste("N =", nrow(gm2019))) +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          panel.grid.major.x = element_blank()) +
+    labs(x = "Provider",
+         y = "Observed/Expected\nClaims per 1K\nBeneficiaries")
+
+```
+
+
+## Standardized prescribing rate by county
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE, fig.height = 5.5}
+
+# {data-background=foo.png data-background-size=cover}
+
+county_yr_oe <- fit_gm_year %>%
+    filter(Prscrbr_County != "Not ID") %>%
+    mutate(oe = claims_1k / fitted_claims_1k) %>%
+    group_by(Year, Prscrbr_County) %>%
+    summarize(n_oe = sum(!is.na(oe)),
+              mean_oe = mean(oe, na.rm = TRUE),
+              n_o = sum(!is.na(claims_1k)),
+              mean_o = mean(claims_1k, na.rm = TRUE), .groups = "drop")
+
+# US county shapes
+counties <- fromJSON(file = "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json")
+counties_tbl <- counties %>% as_tibble()
+
+# Data to plot on map
+map_data <- map_dfr(counties_tbl[[2]], function(county) {
+    tibble(fips = county$id,
+           county = county$properties$NAME)}) %>%
+    mutate(state = str_extract(fips, "^[0-9]{2}")) %>%
+    filter(state == "16") %>%
+    left_join(county_yr_oe %>%
+                  filter(Year == 2019) %>%
+                  rename(county = Prscrbr_County),
+              by = "county") %>%
+    mutate(n_oe = if_else(is.na(n_oe), 0L, n_oe),
+           hover_text = paste0(
+               county, "<br>",
+               "N = ", n_oe, "<br>",
+               "O/E = ", round(mean_oe, digits = 2)),
+           NA_trace = if_else(is.na(mean_oe), 1L, NA_integer_))
+
+# Figure
+plot_ly() %>%
+    
+    # Trace for counties with defined O/E
+    add_trace(
+        type = "choroplethmapbox",
+        geojson = counties,
+        locations = map_data$fips,
+        z = map_data$mean_oe,
+        zmin = min(map_data$mean_oe),
+        zmax = max(map_data$mean_oe),
+        text = map_data$hover_text,
+        hoverinfo = "text",
+        colorscale = "Viridis",
+        marker = list(line = list(width = 0),
+                      opacity = 0.5)) %>%
+    
+    # Trace for counties with NA O/E
+    add_trace(
+        type = "choroplethmapbox",
+        geojson = counties,
+        locations = map_data$fips,
+        z = map_data$NA_trace,
+        text = map_data$hover_text,
+        hoverinfo = "text",
+        
+        # Counties with missing values will be gray & scale won't be shown
+        colorscale = "Greys",
+        showscale = FALSE,
+        marker = list(line = list(width = 0),
+                      opacity = 0.5)) %>%
+    colorbar(title = "Observed/Expected\nClaims per 1K\nBeneficiaries",
+             outlinewidth = 0,
+             thickness = 30) %>%
+    layout(mapbox = list(
+        style = "carto-positron",
+        zoom = 4.95,
+        center = list(lon = -114, lat = 45.6)))
+
+```
+
+# 2019 emergency medicine<br>providers
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Place names based on Google API
+places <- read_feather("Address-name bank.feather") %>%
+    select(org = name, dataset_address)
+
+# 2019 emergency medicine with place names joined in
+em2019 <- p3 %>%
+    filter(Prscrbr_Type_Std == "Emergency Medicine",
+           Year == 2019) %>%
+    left_join(places, by = "dataset_address")
+    
+# Add categorization of places. This is just a partial coding of the places that
+# occur more often. Could do more.
+em2019 <- em2019 %>%
+    mutate(org = case_when(
+        str_detect(org, "Luke") ~ "St. Luke's",
+        str_detect(org, "Alphonsus") ~ "St. Alphonsus",
+        str_detect(org, "Portneuf") ~ "Portneuf",
+        str_detect(org, "Kootenai") ~ "Kootenai",
+        str_detect(org, "EIRMC") ~ "EIRMC",
+        str_detect(org, "Joseph") ~ "St. Joseph",
+        str_detect(org, "Madison") ~ "Madison Memorial",
+        str_detect(org, "Bonner") ~ "Bonner General Health",
+        str_detect(org, "Boundary") ~ "Boundary Community Hospital",
+        str_detect(org, "Cassia") ~ "Cassia Regional Hospital",
+        TRUE ~ "Other"))
+
+# Orgs with >= 5 emergency medicine providers
+orgs <- em2019 %>%
+    count(org) %>%
+    filter(n >= 5,
+           org != "Other") %>%
+    pull(org)
+
+# 2019 emergency medicine filitered to orgs with >= 5 providers
+em2019.1 <- em2019 %>%
+    filter(org %in% orgs)
+
+```
+
+## Methods
+
+- Analysis based on the provider dataset.
+- Limited to healthcare systems with five or more emergency medicine providers.
+- Used examination of bivariate relationships between all possible predictors and the outcome---log(claims/1K beneficiaries)---to define 12 candidate models.
+- Selected the final, best-fit model based on AIC.
+- Validated the final model on 2019 training, and 2013-2018 test data.
+
+## Emergency medicine prescribing rate by healthcare system {data-background=foo.png data-background-size=cover}
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Visualize org diffs
+em2019.1 %>%
+    left_join(em2019.1 %>%
+                  count(org),
+              by = "org") %>%
+    mutate(org = paste0(org, "\nN = ", n),
+           org = fct_reorder(org, claims_1k)) %>%
+    ggplot(aes(x = org, y = claims_1k)) +
+    geom_boxplot() +
+    coord_flip() +
+    theme(axis.title.y = element_blank()) +
+    labs(y = "Claims per 1K beneficiaries")
+
+```
+
+## Training fit
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Final model
+em11 <- lm(log_claims_1k ~ 1 +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2),
+   data = em2019.1)
+
+# Add fitted values to data
+em2019.1$fitted_log_claims_1k <- fitted(em11)
+em2019.1 <- em2019.1 %>%
+    mutate(fitted_claims_1k = exp(fitted_log_claims_1k),
+           oe = claims_1k / fitted_claims_1k)
+
+# Figure of fitted versus observed values
+min_axis <- if_else(min(em2019.1$fitted_log_claims_1k) < min(
+    em2019.1$log_claims_1k),
+    min(em2019.1$fitted_log_claims_1k),
+    min(em2019.1$log_claims_1k))
+max_axis <- if_else(max(em2019.1$fitted_log_claims_1k) > max(
+    em2019.1$log_claims_1k),
+    max(em2019.1$fitted_log_claims_1k),
+    max(em2019.1$log_claims_1k))
+rsq <- format(glance(em11) %>% pull(r.squared), digits = 2, nsmall = 2)
+em2019.1 %>%
+    ggplot(aes(x = fitted_log_claims_1k, y = log_claims_1k)) +
+    geom_point(alpha = 0.2) +
+    geom_abline(intercept = 0, slope = 1, color = "blue", size = 0.2) +
+    scale_x_continuous(limits = c(min_axis, max_axis)) +
+    scale_y_continuous(limits = c(min_axis, max_axis)) +
+    labs(subtitle = paste0("N = ", nrow(em2019.1), ", r-squared = ", rsq),
+         x = "Fitted prescribing rate",
+         y = "Observed\nprescribing\nrate")
+
+```
+
+## Test fit
+
+<div class="columns-2">
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 3.75, fig.height = 4, cache = TRUE}
+
+# Validate EM model by training on 2019, testing on 2013-2018. Want to compare
+# em11 (model preferred by log-likelihood & AIC comparison) versus em14 (linear
+# terms only).
+
+# Training and test sets
+train <- p3 %>%
+    filter(Year == 2019,
+           Prscrbr_Type_Std == "Emergency Medicine") %>%
+    left_join(places, by = "dataset_address") %>%
+    mutate(org = case_when(
+        str_detect(org, "Luke") ~ "St. Luke's",
+        str_detect(org, "Alphonsus") ~ "St. Alphonsus",
+        str_detect(org, "Portneuf") ~ "Portneuf",
+        str_detect(org, "Kootenai") ~ "Kootenai",
+        str_detect(org, "EIRMC") ~ "EIRMC",
+        str_detect(org, "Joseph") ~ "St. Joseph",
+        str_detect(org, "Madison") ~ "Madison Memorial",
+        str_detect(org, "Bonner") ~ "Bonner General Health",
+        str_detect(org, "Boundary") ~ "Boundary Community Hospital",
+        str_detect(org, "Cassia") ~ "Cassia Regional Hospital",
+        TRUE ~ "Other")) %>%
+    filter(org %in% orgs)
+test <- p3 %>%
+    filter(Year != 2019,
+           Prscrbr_Type_Std == "Emergency Medicine") %>%
+    left_join(places, by = "dataset_address") %>%
+    mutate(org = case_when(
+        str_detect(org, "Luke") ~ "St. Luke's",
+        str_detect(org, "Alphonsus") ~ "St. Alphonsus",
+        str_detect(org, "Portneuf") ~ "Portneuf",
+        str_detect(org, "Kootenai") ~ "Kootenai",
+        str_detect(org, "EIRMC") ~ "EIRMC",
+        str_detect(org, "Joseph") ~ "St. Joseph",
+        str_detect(org, "Madison") ~ "Madison Memorial",
+        str_detect(org, "Bonner") ~ "Bonner General Health",
+        str_detect(org, "Boundary") ~ "Boundary Community Hospital",
+        str_detect(org, "Cassia") ~ "Cassia Regional Hospital",
+        TRUE ~ "Other")) %>%
+    filter(org %in% orgs)
+
+# Separate test sets per year
+test_2018 <- test %>% filter(Year == 2018)
+test_2017 <- test %>% filter(Year == 2017)
+test_2016 <- test %>% filter(Year == 2016)
+test_2015 <- test %>% filter(Year == 2015)
+test_2014 <- test %>% filter(Year == 2014)
+test_2013 <- test %>% filter(Year == 2013)
+
+# Model specification & engine
+lm_model <- linear_reg() %>%
+    set_engine("lm")
+
+# Fit m5
+fit_em11 <- lm_model %>%
+    fit(log_claims_1k ~ 1 +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2),
+       data = train)
+
+# Fit m8
+fit_em14 <- lm_model %>%
+    fit(log_claims_1k ~ 1 +
+       Bene_Avg_Risk_Scre +
+       Bene_Prop_Fem,
+       data = train)
+
+# Store test set predictions from each model
+test$em11_pred <- predict(fit_em11, new_data = test) %>% pull(.pred)
+test$em14_pred <- predict(fit_em14, new_data = test) %>% pull(.pred)
+
+# Predictions per year
+test_2018$em11_pred <- predict(fit_em11, new_data = test_2018) %>% pull(.pred)
+test_2018$em14_pred <- predict(fit_em14, new_data = test_2018) %>% pull(.pred)
+test_2017$em11_pred <- predict(fit_em11, new_data = test_2017) %>% pull(.pred)
+test_2017$em14_pred <- predict(fit_em14, new_data = test_2017) %>% pull(.pred)
+test_2016$em11_pred <- predict(fit_em11, new_data = test_2016) %>% pull(.pred)
+test_2016$em14_pred <- predict(fit_em14, new_data = test_2016) %>% pull(.pred)
+test_2015$em11_pred <- predict(fit_em11, new_data = test_2015) %>% pull(.pred)
+test_2015$em14_pred <- predict(fit_em14, new_data = test_2015) %>% pull(.pred)
+test_2014$em11_pred <- predict(fit_em11, new_data = test_2014) %>% pull(.pred)
+test_2014$em14_pred <- predict(fit_em14, new_data = test_2014) %>% pull(.pred)
+test_2013$em11_pred <- predict(fit_em11, new_data = test_2013) %>% pull(.pred)
+test_2013$em14_pred <- predict(fit_em14, new_data = test_2013) %>% pull(.pred)
+
+# Per year metrics
+train_metrics <- bind_rows(
+    metrics(test_2018, log_claims_1k, em11_pred) %>%
+        mutate(Year = 2018, model = "em11"),
+    metrics(test_2018, log_claims_1k, em14_pred) %>%
+        mutate(Year = 2018, model = "em14"),
+    metrics(test_2017, log_claims_1k, em11_pred) %>%
+        mutate(Year = 2017, model = "em11"),
+    metrics(test_2017, log_claims_1k, em14_pred) %>%
+        mutate(Year = 2017, model = "em14"),
+    metrics(test_2016, log_claims_1k, em11_pred) %>%
+        mutate(Year = 2016, model = "em11"),
+    metrics(test_2016, log_claims_1k, em14_pred) %>%
+        mutate(Year = 2016, model = "em14"),
+    metrics(test_2015, log_claims_1k, em11_pred) %>%
+        mutate(Year = 2015, model = "em11"),
+    metrics(test_2015, log_claims_1k, em14_pred) %>%
+        mutate(Year = 2015, model = "em14"),
+    metrics(test_2014, log_claims_1k, em11_pred) %>%
+        mutate(Year = 2014, model = "em11"),
+    metrics(test_2014, log_claims_1k, em14_pred) %>%
+        mutate(Year = 2014, model = "em14"),
+    metrics(test_2013, log_claims_1k, em11_pred) %>%
+        mutate(Year = 2013, model = "em11"),
+    metrics(test_2013, log_claims_1k, em14_pred) %>%
+        mutate(Year = 2013, model = "em14")) %>%
+    filter(.metric != "mae") %>%
+    mutate(.metric = if_else(.metric == "rmse", "RMSE", "R-Squared"),
+           model = if_else(model == "em11", "Full", "Linear Only"))
+
+# R-squared figure
+train_metrics %>%
+    filter(.metric == "R-Squared") %>%
+    ggplot(aes(x = Year, y = .estimate, group = model, color = model)) +
+    geom_line() +
+    scale_x_continuous(breaks = seq(2013, 2018, 2)) +
+    scale_y_continuous(name = "R-Squared") +
+    scale_color_discrete(name = "Model") +
+    guides(color = "none")
+
+```
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 5, fig.height = 4, cache = TRUE}
+
+# RMSE figure
+train_metrics %>%
+    filter(.metric == "RMSE") %>%
+    ggplot(aes(x = Year, y = .estimate, group = model, color = model)) +
+    geom_line() +
+    scale_x_continuous(breaks = seq(2013, 2018, 2)) +
+    scale_y_continuous(name = "RMSE") +
+    scale_color_discrete(name = "Model")
+
+```
+
+</div>
+
+## Final model coefficients
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Final model coefficients
+em11 %>%
+    tidy() %>%
+    mutate(across(where(is.numeric), ~ format(., digits = 2, nsmall = 2))) %>%
+    datatable(
+        rownames = FALSE,
+        colnames = c("Term", "Estimate", "SE", "t", "p"),
+        options = list(dom = "t"))
+
+```
+
+## Standardized prescribing rate by provider
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE}
+
+# Dotplot of OE ratios for 2019 general medicine
+em2019.1 %>%
+    mutate(Prscrbr_NPI = fct_reorder(Prscrbr_NPI, -oe)) %>%
+    ggplot(aes(x = Prscrbr_NPI, y = oe)) +
+    geom_point(color = "dodgerblue", alpha = .2) +
+    geom_hline(yintercept = 1, linetype = "dashed", size = .2) +
+    annotate(geom = "text", x = 90, y = 1.8,
+             label = paste("N =", nrow(em2019.1))) +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          panel.grid.major.x = element_blank()) +
+    labs(x = "Provider",
+         y = "Observed/Expected\nClaims per 1K\nBeneficiaries")
+
+```
+
+## Standardized prescribing rate by county {data-background=foo.png data-background-size=cover}
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, cache = TRUE, fig.height = 5.5}
+
+county_oe <- em2019.1 %>%
+    filter(Prscrbr_County != "Not ID") %>%
+    group_by(Year, Prscrbr_County) %>%
+    summarize(n_oe = sum(!is.na(oe)),
+              mean_oe = mean(oe, na.rm = TRUE),
+              n_o = sum(!is.na(claims_1k)),
+              mean_o = mean(claims_1k, na.rm = TRUE), .groups = "drop")
+
+# Create dataset
+map_data <- map_data %>%
+    select(fips:Year) %>%
+    left_join(county_oe %>%
+                  rename(county = Prscrbr_County),
+              by = c("county", "Year")) %>%
+    mutate(n_oe = if_else(is.na(n_oe), 0L, n_oe),
+           hover_text = paste0(
+               county, "<br>",
+               "N = ", n_oe, "<br>",
+               "O/E = ", round(mean_oe, digits = 2)),
+           NA_trace = if_else(is.na(mean_oe), 1L, NA_integer_))
+
+# Figure
+plot_ly() %>%
+    
+    # Trace for counties with defined O/E
+    add_trace(
+        type = "choroplethmapbox",
+        geojson = counties,
+        locations = map_data$fips,
+        z = map_data$mean_oe,
+        zmin = min(map_data$mean_oe),
+        zmax = max(map_data$mean_oe),
+        text = map_data$hover_text,
+        hoverinfo = "text",
+        colorscale = "Viridis",
+        marker = list(line = list(width = 0),
+                      opacity = 0.5)) %>%
+    
+    # Trace for counties with NA O/E
+    add_trace(
+        type = "choroplethmapbox",
+        geojson = counties,
+        locations = map_data$fips,
+        z = map_data$NA_trace,
+        text = map_data$hover_text,
+        hoverinfo = "text",
+        
+        # Counties with missing values will be gray & scale won't be shown
+        colorscale = "Greys",
+        showscale = FALSE,
+        marker = list(line = list(width = 0),
+                      opacity = 0.5)) %>%
+    colorbar(title = "Observed/Expected\nClaims per 1K\nBeneficiaries",
+             outlinewidth = 0,
+             thickness = 30) %>%
+    layout(mapbox = list(
+        style = "carto-positron",
+        zoom = 4.95,
+        center = list(lon = -114, lat = 45.6)))
+
+```

@@ -14,3 +14,9 @@ test_place_names_acc
 *.html
 compute_time.R
 *.rds
+*.png
+*.svg
+/ioslides-presentation_cache
+/ioslides-slides_cache
+/lib
+

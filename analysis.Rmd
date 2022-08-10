@@ -20,6 +20,10 @@ knitr::opts_chunk$set(dev = "svg")
 
 ```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
+###############################################################################
+#### Read in by-provider ####
+###############################################################################
+
 # Read in provider type bank
 p_types <- read_feather("Idaho provider type bank.feather") %>%
     select(Prscrbr_Type, Std_Provider_Type)
@@ -29,16 +33,20 @@ address_county <- read_feather("Address-query-county bank.feather")
 
 # By-provider dataset
 p <- read_feather("Idaho prescribers by provider data.feather") %>%
-    mutate(Bene_Prop_Fem = Bene_Feml_Cnt / Tot_Benes,
-           Bene_Prop_White = Bene_Race_Wht_Cnt / Tot_Benes,
-           Prscrbr_RUCA = floor(Prscrbr_RUCA),
+    rename(Year = year) %>%
+    mutate(Prscrbr_RUCA = floor(Prscrbr_RUCA),
            Prscrbr_RUCA_fct = factor(Prscrbr_RUCA),
+           Prscrbr_Fem = if_else(Prscrbr_Gndr == "F", 1L, 0L),
+           Bene_Prop_Fem = Bene_Feml_Cnt / Tot_Benes,
+           Bene_Prop_White = Bene_Race_Wht_Cnt / Tot_Benes,
            dataset_address = str_squish(
                 paste(Prscrbr_St1,
                       Prscrbr_St2,
                       Prscrbr_City,
                       Prscrbr_State_Abrvtn,
-                      Prscrbr_Zip5))) %>%
+                      Prscrbr_Zip5)),
+           claims_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000),
+           log_claims_1k = log(claims_1k)) %>%
     
     # Standardized prescriber types
     left_join(p_types, by = c("Prscrbr_Type")) %>%
@@ -46,22 +54,44 @@ p <- read_feather("Idaho prescribers by provider data.feather") %>%
     # County info
     left_join(address_county %>%
                   select(dataset_address, county),
-              by = "dataset_address") %>%
-    select(Year = year,
-           Prscrbr_NPI,
-           Prscrbr_Type_Std = Std_Provider_Type,
-           Prscrbr_RUCA,
-           Prscrbr_RUCA_fct,
-           Prscrbr_Gndr,
-           Prscrbr_State_Abrvtn,
-           Prscrbr_County = county,
-           Antbtc_Tot_Clms,
-           Tot_Benes,
-           Bene_Avg_Age,
-           Bene_Avg_Risk_Scre,
-           Bene_Prop_Fem,
-           Bene_Prop_White,
-           dataset_address)
+              by = "dataset_address")
+
+###############################################################################
+#### Read in by-provider-and-drug ####
+###############################################################################
+
+# Names and class coding of generic drugs
+generics <- read_feather("Generic drug bank.feather")
+
+# Names of drug classes
+drug_classes <- names(generics)[2:length(names(generics))]
+
+# Read in by-provider-and-drug dataset
+pd <- read_feather("Idaho prescribers by provider & drug data.feather") %>%
+    
+    # Join in coding for drug classes from generics
+    left_join(generics, by = "Gnrc_Name") %>%
+    select(Prscrbr_NPI, Year = year, Gnrc_Name, Tot_Clms, Antibiotic:Other)
+
+# Summarize total claims per provider per year per drug class
+pd2 <- map_dfr(drug_classes, function(class) {
+    message(paste0("Getting claim data for class ", class, "..."))
+    pd %>%
+        filter(!!sym(class) == 1) %>%
+        group_by(Prscrbr_NPI, Year) %>%
+        summarize(
+            n_drugs = sum(!is.na(Tot_Clms)),
+            tot_clms = sum(Tot_Clms, na.rm = TRUE), .groups = "drop") %>%
+        mutate(class = class) }) %>%
+    
+    # Join in Tot_Benes from p
+    left_join(p %>%
+                  select(Year , Prscrbr_NPI, Tot_Benes),
+              by = c("Year", "Prscrbr_NPI")) %>%
+    
+    # Compute claims 1k
+    mutate(claims_1k = tot_clms / (Tot_Benes / 1000),
+           log_claims_1k = log(claims_1k))
 
 ```
 
@@ -71,287 +101,381 @@ p <- read_feather("Idaho prescribers by provider data.feather") %>%
 
 # The by-provider dataset
 
-The *Medicare Part D Prescribers - by Provider dataset* is publically-available [here](https://data.cms.gov/provider-summary-by-type-of-service/medicare-part-d-prescribers/medicare-part-d-prescribers-by-provider). Each row in the dataset gives prescribing information for a particular provider in a particular year. The present work focuses on rows representing Idaho providers in all available dataset years (currently `r min(p$year)`-`r max(p$year)`). This amounts to `r format(nrow(p), big.mark = ",")` rows.
+The *Medicare Part D Prescribers - by Provider dataset* is publically-available [here](https://data.cms.gov/provider-summary-by-type-of-service/medicare-part-d-prescribers/medicare-part-d-prescribers-by-provider). Each row in the dataset gives prescribing information for a particular provider in a particular year. The present work focuses on rows representing Idaho providers in all available dataset years (currently `r min(p$Year)`-`r max(p$Year)`). This amounts to `r format(nrow(p), big.mark = ",")` rows.
 
 The main focus of the study is on antibiotic prescribing behavior. Consequently, we are interested in the number of antibiotic claims providers have, and on variables that may be useful in predicting antibiotic claims. A subset of rows illustrating these data are shown below in Table 1.
 
 ```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-set.seed(1)
+# By-provider example rows
 p %>%
-    sample_n(10) %>%
+    select(Year, Prscrbr_NPI, Antbtc_Tot_Clms, Tot_Benes) %>%
+    filter(Prscrbr_NPI == "1295735769",
+           Year %in% c(2019, 2018)) %>%
     mutate(across(where(is.numeric), ~ round(., digits = 2))) %>%
     datatable(caption = "Table 1: Example rows from the by-providers dataset.",
               rownames = FALSE,
               options = list(dom = "t"))
 
-# Drop rows missing claims, impute Tot_Benes
+# By-provider-and-drug example rows
+pd2 %>%
+    select(Year, Prscrbr_NPI, Drug = class, Tot_Clms = tot_clms) %>%
+    filter(Prscrbr_NPI == "1295735769",
+           Year %in% c(2019, 2018),
+           !Drug %in% c("Antibiotic", "Macrolide")) %>%
+    arrange(desc(Year)) %>%
+    datatable(caption = "Table 1: Example rows from the by-providers dataset.",
+              rownames = FALSE,
+              options = list(dom = "t"))
+
+```
+
+The main outcome of interest is the number of claims per 1K beneficiaries. This requires the presence of valid values for both Antbtc_Tot_Clms and Tot_Benes, which means that significant amounts of data must be excluded.
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Table with missingness for claims and beneficiaries
+p %>%
+    select(Antbtc_Tot_Clms, Tot_Benes) %>%
+    summarize(across(everything(), ~ sum(is.na(.) | . < 11))) %>%
+    pivot_longer(cols = everything(), names_to = "column",
+                 values_to = "n_missing") %>%
+    mutate(pct_missing = format(n_missing / nrow(p) * 100, digits = 2,
+                                nsmall = 2),
+           n_missing = format(n_missing, big.mark = ",")) %>%
+    arrange(desc(pct_missing)) %>%
+    datatable(caption = "Table 1: Proportion of data with claim or beneficiary values that are missing or less than eleven",
+              rownames = FALSE,
+              colnames = c("Variable", "N", "%"),
+              options = list(dom = "t",
+                             pageLength = ncol(p)))
+
+# Limit to rows with > 10 antibiotic claims and beneficiaries
 p2 <- p %>%
     filter(!is.na(Antbtc_Tot_Clms),
-           Antbtc_Tot_Clms >= 11) %>%
-    mutate(Tot_Benes = if_else(is.na(Tot_Benes), 10, Tot_Benes),
-           claims_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000),
-           log_claims_1k = log(claims_1k))
+           Antbtc_Tot_Clms > 10,
+           !is.na(Tot_Benes))
 
+```
+
+In the remaining data, additional exclusions were enforced for variables with less than 10% missingness. Variables with missingness greather than or equal to 10% were not used in any analyses.
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Table showing no missing values in the columns we'll be using
+p2 %>%
+    summarize(across(everything(), ~ sum(is.na(.)))) %>%
+    pivot_longer(cols = everything(), names_to = "column",
+                 values_to = "n_missing") %>%
+    filter(column %in% c("Prscrbr_Gndr", "Std_Provider_Type",
+                         "Antbtc_Tot_Clms", "Tot_Benes", "Bene_Avg_Age",
+                         "Bene_Avg_Risk_Scre", "Year", "Prscrbr_RUCA",
+                         "Bene_Race_Wht_Cnt", "Bene_Feml_Cnt", "Bene_Dual_Cnt",
+                         "Bene_Race_Natind_Cnt", "Bene_Race_Black_Cnt",
+                         "Bene_Race_Api_Cnt", "Bene_Race_Hspnc_Cnt",
+                         "Bene_Race_Othr_Cnt")) %>%
+    mutate(pct_missing = format(n_missing / nrow(p2) * 100, digits = 2,
+                                nsmall = 2),
+           n_missing = format(n_missing, big.mark = ",")) %>%
+    arrange(desc(pct_missing)) %>%
+    datatable(caption = "Table 2: Missing values after exclusions based on claims and beneficiaries",
+              rownames = FALSE,
+              colnames = c("Variable", "N Missing", "% Missing"),
+              options = list(dom = "t",
+                             pageLength = ncol(p2)))
+
+# Exclude missing values of Bene_Prop_Fem, Bene_Prop_White, Prscrbr_RUCA
 p3 <- p2 %>%
     filter(!is.na(Bene_Prop_Fem),
            !is.na(Bene_Prop_White),
-           !is.na(Prscrbr_RUCA))
+           !is.na(Prscrbr_RUCA)) %>%
+    select(Year,
+           Prscrbr_NPI,
+           Prscrbr_Last_Org_Name,
+           Prscrbr_First_Name,
+           Prscrbr_Type_Std = Std_Provider_Type,
+           Prscrbr_RUCA,
+           Prscrbr_RUCA_fct,
+           Prscrbr_Gndr,
+           Prscrbr_Fem,
+           Prscrbr_State_Abrvtn,
+           Prscrbr_County = county,
+           Antbtc_Tot_Clms,
+           Tot_Benes,
+           Bene_Avg_Age,
+           Bene_Avg_Risk_Scre,
+           Bene_Feml_Cnt,
+           Bene_Prop_Fem,
+           Bene_Prop_White,
+           Bene_Race_Wht_Cnt,
+           claims_1k,
+           log_claims_1k,
+           dataset_address)
 
 ```
 
-- Drop missing claims
-- Impute missing beneficiaries (after Guion?)
-- Drop remaining missing values--X percent that are missing either fem or white.
+<br>
 
+***
 
-Note that many rows are missing values, including a number that are missing the outcome variable--Antbtc_Tot_Clms--and the number of beneficiaries--Tot_Benes. These variable are surpressed for counts of claims or beneficiaries less than 11.
+## Descriptive statistics
 
+### Providers by year
 
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-
-After excluding rows missing either of these variables, the dataset consists of `r format(nrow(p2), big.mark = ",")` rows.
-
-
-
-
-
-Table 2 summarizes missingness in the by-providers dataset for the State of Idaho from `r min(p$year)` to `r max(p$year)`.
-
-```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
-
-# Summarize_all superseded by summarize(across(...))
-
+# Provider table by year
 p3 %>%
-    summarize_all(~ sum(is.na(.)) / n()) %>%
-    pivot_longer(cols = everything(), names_to = "column",
-                 values_to = "p_missing") %>%
-    arrange(desc(p_missing)) %>%
-    mutate(across(where(is.numeric), ~ round(., digits = 4))) %>%
-    datatable(caption = "Table 2: Proportion of data missing across various columns.",
-              rownames = FALSE,
-              options = list(dom = "t",
-                             pageLength = ncol(p3)))
+    compute_sum_p(group = "Year") %>%
+    provider_table()
 
 ```
 
-Both Antbtc_Tot_Clms and Tot_Benes need to be defined in order to compute each provider's claims per beneficiary. Missing values of Tot_Benes were imputed as 10. Rows missing Antbtc_Tot_Clms were excluded from analysis.
+<br>
 
+***
 
-```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+### 2019 providers by type
 
-# Better way to talk about this is that we have certain columns we're interested in retaining for modeling purposes. For these cols we impute some missing values, and exclude rows with others. Just say how many rows were lost out of the total, and that mostly this was due to missing claims.
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-# We start out with X rows.
-
-# We're left with Y rows. We lose W rows due to missing claims, plus another Z rows due to missing fem/white.
-
-
-# After dropping missing claims stuf, only 10 and 8% missingness in fem and white.
-# p2 %>%
-#     summarize_all(~ sum(is.na(.)) / n()) %>%
-#     pivot_longer(cols = everything(), names_to = "column",
-#                  values_to = "p_missing") %>%
-#     arrange(desc(p_missing)) %>%
-#     mutate(across(where(is.numeric), ~ round(., digits = 2))) %>%
-#     datatable(caption = "Table 2: Proportion of data missing across various columns.",
-#               rownames = FALSE,
-#               options = list(dom = "t",
-#                              pageLength = ncol(p)))
-
-# Read in generic drug bank
-generics <- read_feather("Generic drug bank.feather")
-
-# Read in by-provider-and-drug dataset. This has claims numbers for computing
-# claims per 1K beneficiaries.
-pd <- read_feather("Idaho prescribers by provider & drug data.feather") %>%
-    
-    # Join in coding for drug classes from generics
-    left_join(generics, by = "Gnrc_Name") %>%
-    select(Prscrbr_NPI, year, Gnrc_Name, Tot_Clms, Antibiotic:Other)
-    
-# Read in by-provider dataset. This has beneficiary numbers for computing claims
-# per 1K beneficiaries. Join in prescriber type (only have this for 2019 so
-# far).
-# %>%
-    
-    # Join county
-    # left_join(add2, by = "dataset_address")
-    
-# List of ~ 1K addresses curently missing counties
-# p %>% filter(is.na(county)) %>%
-#     select(dataset_address) %>%
-#     unique()
+# Provider table by year
+p3 %>%
+    filter(Year == 2019) %>%
+    rename(`Provider Type` = Prscrbr_Type_Std) %>%
+    compute_sum_p(group = "Provider Type") %>%
+    provider_table()
 
 ```
 
+<br>
 
-### Counts of providers per year
+***
 
-```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+### Beneficiaries by year
 
-# Counts of providers per year
-p %>%
-    count(Year)
-```
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-### No missing provider type info
-
-```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
-# There's no missing provider type info
-p %>%
-    select(Year, Prscrbr_Type_Std) %>%
-    group_by(Year) %>%
-    summarize_all(~ sum(is.na(.)) / n())
+# Beneficiary table by year
+p3 %>%
+    compute_sum_p(group = "Year") %>%
+    beneficiary_table()
 
 ```
 
-### What the basic data look like
+<br>
 
-```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+***
 
-# Separate into tables based on whether Tot_Benes is defined or not
-# yes_benes <- p %>% filter(!is.na(Tot_Benes))
-# no_benes <- p %>% filter(is.na(Tot_Benes))
-# 
-# # For NA values, impute
-# # NOTE: Can we also impute values for other cols? Most of these are subject to
-# # the > 10 beneficiary rule.
-# set.seed(1)
-# no_benes$Tot_Benes_Imp <- round(rnorm(n = nrow(no_benes), mean = 5.5, sd = 1.5))
-# no_benes <- no_benes %>%
-#     mutate(Tot_Benes_Imp = case_when(
-#         Tot_Benes_Imp > 10 ~ 10,
-#         Tot_Benes_Imp < 1 ~ 1,
-#         TRUE ~ Tot_Benes_Imp))
-# 
-# # Recombine to form p_benes with imputed values for NA Tot_Benes
-# p <- bind_rows(yes_benes, no_benes) %>%
-#     mutate(percent_fem = Bene_Feml_Cnt / Tot_Benes * 100,
-#            percent_fem_imp = Bene_Feml_Cnt / Tot_Benes_Imp * 100)
+### 2019 beneficiaries by provider type
 
-# Drug classes that we want to compute claims per 1K beneficiaries for
-drug_classes <- names(generics)[2:length(names(generics))]
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-# Cross every provider NPI appearing in 2013-2019 p data with each year from
-# 2013-2019 with all 11 drug classes.
-crossed <- expand_grid(year = unique(p$Year),
-                          class = drug_classes,
-                          Prscrbr_NPI = unique(p$Prscrbr_NPI))
+# 2019 beneficiaries by provider type
+p3 %>%
+    filter(Year == 2019) %>%
+    rename(`Provider Type` = Prscrbr_Type_Std) %>%
+    compute_sum_p(group = "Provider Type") %>%
+    beneficiary_table()
 
-# Summarize total claims per provider per year per drug class from pd
-pd2 <- map_dfr(drug_classes, function(class) {
-    message(paste0("Getting claim data for class ", class, "..."))
-    pd %>%
-        filter(!!sym(class) == 1) %>%
-        group_by(Prscrbr_NPI, year) %>%
-        dplyr::summarize(
-            n_drugs = sum(!is.na(Tot_Clms)),
-            n_na_tot_clms = sum(is.na(Tot_Clms)),
-            tot_clms = sum(Tot_Clms, na.rm = TRUE),
-            .groups = "drop") %>%
-        mutate(class = class) })
+```
 
-# Join summarized claims data to crossed
-pd3 <- crossed %>%
-    left_join(pd2, by = c("Prscrbr_NPI", "year", "class"))
+<br>
 
-# Join pd3 to p
-# p2 <- p %>%
-#     left_join(pd3, by = c("Prscrbr_NPI", "year")) %>%
-#     mutate(tot_clms = if_else(is.na(tot_clms), 0, tot_clms),
-#            claims_1k = tot_clms / (Tot_Benes / 1000),
-#            claims_ben_ratio = tot_clms / Tot_Benes,
-#            log_claims_1k = log(claims_1k),
-#            log_claims_1k_one = log(claims_1k + 1))
+***
+
+### Antibiotic use by year
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Antibiotic use by year
+p3 %>%
+    compute_sum_p(group = "Year") %>%
+    use_table()
+
+```
+
+<br>
+
+***
+
+### 2019 antibiotic use by provider type
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Antibiotic use by year
+p3 %>%
+    filter(Year == 2019) %>%
+    rename(`Provider Type` = Prscrbr_Type_Std) %>%
+    compute_sum_p(group = "Provider Type") %>%
+    use_table()
+
+```
+
+# The by-provider-and-drug dataset
+
+The figures below show average claims per 1K beneficiaries for different drug classes over time.
+
+- Lines represent unweighted means.
+- Ribbons are bootstrapped 95% CIs of the means.
+- Percentages show the mean annual percent change. For example, if a facet shows -1% that means that use of the drug declined by 1% on average per year.
+- Trends that are significant show a *p*-value.
+- *P*-values were generated from models of log(claims 1k) ~ year for each drug class.
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.heigh = 4, fig.width = 11}
+
+
+# Examples showing what data looks like
+pd2 %>%
+    filter(Prscrbr_NPI == "1003012204",
+           Year == 2019)
+pd2 %>%
+    filter(Prscrbr_NPI == "1003012204",
+           Year == 2014)
+
+# Compute average percent change across years for each class
+pct_change <- pd2 %>%
+    group_by(class, Year) %>%
+    summarize(n_prscrbr = sum(!is.na(claims_1k)),
+              mean_clms_1k = mean(claims_1k, na.rm = TRUE),
+              .groups = "drop") %>%
+    pivot_wider(matches("class"), names_from = "Year",
+                values_from = "mean_clms_1k") %>%
+    mutate(change13_14 = (`2014` - `2013`) / `2013` * 100,
+           change14_15 = (`2015` - `2014`) / `2014` * 100,
+           change15_16 = (`2016` - `2015`) / `2015` * 100,
+           change16_17 = (`2017` - `2016`) / `2016` * 100,
+           change17_18 = (`2018` - `2017`) / `2017` * 100,
+           change18_19 = (`2019` - `2018`) / `2018` * 100) %>%
+    select(-(`2013`:`2019`)) %>%
+    pivot_longer(matches("change"), names_to = "years",
+                 values_to = "pct_change") %>%
+    group_by(class) %>%
+    summarize(n = sum(!is.na(pct_change)),
+              mean_pct_chg_yr = mean(pct_change, na.rm = TRUE),
+              .groups = "drop") %>%
+    arrange(mean_pct_chg_yr)
+
+# Compute year effects for each class
+year_effects <- map_dfr(drug_classes, function(class) {
+    data <- pd2 %>% filter(class == !!class)
+    lm(log_claims_1k ~ Year,
+       data = data) %>%
+    tidy() %>%
+    mutate(class = !!class) }) %>%
+    filter(term == "Year") %>%
+    arrange(p.value)
+
+# Compute mean claims 1k for each class
+clms_1k_tab <- pd2 %>%
+    group_by(class) %>%
+    summarize(clms_1k = mean(claims_1k, na.rm = TRUE), .groups = "drop") %>%
+    arrange(desc(clms_1k))
+
+# Function to compute mean
+mean_fun <- function(data, indices) {
+    d <- data[indices]
+    return(mean(d, na.rm = TRUE))
+    }
+
+# Cross years & classes
+year_class <- expand_grid(year = unique(pd2$Year),
+                          class = drug_classes)
+
+# Compute bootstrapped 95% CI for mean(claims_1k) for each combination of year
+# and class.
+year_class_ci <- map2_dfr(year_class$class, year_class$year,
+                          function(class, year) {
+    data <- pd2 %>%
+        filter(class == !!class,
+               Year == !!year)
+    reps <- boot(data$claims_1k, statistic = mean_fun, R = 1000)
+    ci <- boot.ci(reps, conf = 0.95, type = "basic")
+    tibble(class = !!class,
+           Year = !!year,
+           lower = ci$basic[4],
+           upper = ci$basic[5])
+})
+
+# Figure
+fig_data <- pd2 %>%
+    group_by(class, Year) %>%
+    summarize(mean = mean(claims_1k, na.rm = TRUE), .groups = "drop") %>%
     
+    # Join in lower & upper CIs
+    left_join(year_class_ci, by = c("Year", "class")) %>%
+    
+    # Join in percent change
+    left_join(pct_change %>%
+                  select(class, mean_pct_chg_yr), by = "class") %>%
+    
+    # Join in variable to sort levels of claims on
+    left_join(clms_1k_tab, by = "class") %>%
+    
+    # Join in p-values
+    left_join(year_effects %>%
+                  select(class, p.value), by = "class") %>%
+    
+    mutate(p_label = if_else(p.value < 0.05,
+                             paste0(
+                                 "\n",
+                                 format(p.value,
+                                        scientific = TRUE,
+                                        digits = 3)),
+                             ""),
+           facet_label = paste0(class, "\n",
+                                round(mean_pct_chg_yr, digits = 2), "%",
+                                p_label),
+           
+           # Order levels of facet_label
+           facet_label = fct_reorder(facet_label, -clms_1k))
 
-# Get min nonzero claims_1k by class by year
-# mins <- p2 %>%
-#     filter(claims_1k != 0) %>%
-#     group_by(year, class) %>%
-#     dplyr::summarize(claims_1k_min = min(claims_1k, na.rm = TRUE),
-#                      .groups = "drop")
+# Regexp to match five classes with highest claims 1k, excluding Other
+first_five <- paste0(c(clms_1k_tab$class[1:4], clms_1k_tab$class[6]),
+                     collapse = "|")
 
-# Join in min nonzero values
-# p3 <- p2 %>%
-#     left_join(mins, by = c("year", "class")) %>%
-#     mutate(log_claims_1k_half_min = log(claims_1k + claims_1k_min / 2))
+# Regexp to match five classes with lowest claims 1k
+second_five <- paste0(clms_1k_tab$class[7:11], collapse = "|")
 
+# First five
+fig_data %>%
+    filter(str_detect(facet_label, first_five)) %>%
+    ggplot(aes(x = Year, y = mean, ymin = lower, ymax = upper,
+               group = facet_label, color = facet_label, fill = facet_label)) +
+    geom_ribbon(alpha = 0.2, linetype = 0) +
+    geom_line() +
+    scale_x_continuous(breaks = seq(2013, 2019, 2)) +
+    scale_y_continuous(limits = c(0, 500)) +
+    facet_wrap(~ facet_label, ncol = 5) +
+    labs(x = "Year",
+         y = "Claims/1K\nbeneficiaries",
+         color = "Class") +
+    theme(legend.position = "none")
+ggsave("figures/Claims 1k by class by year top five.png", height = 4,
+       width = 12)
 
-
-# 
-#     pd %>%
-#         filter(!!sym(class) == 1) %>%
-#         group_by(.drop = FALSE) %>%
-#         group_by(Prscrbr_NPI, year) %>%
-#         dplyr::summarize(
-#             n_drugs = sum(!is.na(Tot_Clms)),
-#             n_na_tot_clms = sum(is.na(Tot_Clms)),
-#             tot_clms = sum(Tot_Clms, na.rm = TRUE), .groups = "drop") %>%
-#         mutate(class = class) %>%
-#         right_join(p, by = c("Prscrbr_NPI", "year")) }) %>%
-#     mutate(tot_clms = if_else(is.na(tot_clms), 0, tot_clms),
-#            claims_1k = tot_clms / (Tot_Benes / 1000),
-#            claims_1k_imp = tot_clms / (Tot_Benes_Imp / 1000),
-#            
-#            # NOTE: We now have lots of zeros, and log(0) is undefined. Model as
-#            # proportion data (negative binomial?) since that's actually what it is.
-#            log_claims_1k = log(claims_1k),
-#            log_claims_1k_imp = log(claims_1k_imp))
-# 
-# # Summarize across drugs to get total claims per drug *class*. Join in
-# # beneficiary data.
-# p2 <- map_dfr(drug_classes, function(class) {
-#     message(paste0("Getting claim data for class ", class, "..."))
-#     pd %>%
-#         filter(!!sym(class) == 1) %>%
-#         # filter(Antibiotic == 1) %>%
-#         # filter(Tetracycline == 1) %>%
-#         group_by(.drop = FALSE) %>%
-#         group_by(Prscrbr_NPI, year) %>%
-#         dplyr::summarize(
-#             n_drugs = sum(!is.na(Tot_Clms)),
-#             n_na_tot_clms = sum(is.na(Tot_Clms)),
-#             tot_clms = sum(Tot_Clms, na.rm = TRUE), .groups = "drop") %>%
-#         mutate(class = class)
-# })
-#     
-#     %>%
-#         right_join(p, by = c("Prscrbr_NPI", "year")) }) %>%
-#     mutate(tot_clms = if_else(is.na(tot_clms), 0, tot_clms),
-#            claims_1k = tot_clms / (Tot_Benes / 1000),
-#            claims_1k_imp = tot_clms / (Tot_Benes_Imp / 1000),
-#            
-#            # NOTE: We now have lots of zeros, and log(0) is undefined. Model as
-#            # proportion data (negative binomial?) since that's actually what it is.
-#            log_claims_1k = log(claims_1k),
-#            log_claims_1k_imp = log(claims_1k_imp))
-
-# p2 has one row per provider per year per drug class
-# p3 %>% count(class, year)
-# p3 %>% count(year, class)
-
-# Example prescriber: for 2013 we have rows for each drug class. Tot_Benes is always the same because it doesn't change over a year. tot_clms is per drug class.
-# NAs here mean that the join of pd to p by NPI & year failed. We keep the columns from p (npi, year, benes) but we get NA for the cols from pd (class & tot_clms). Doesn't make sense. If the join worked...
-# A provider never provided an rx for drug X in 2019. That means there won't be a row for the drug in pd 2019. So when you try to join that to p you'll get NA
-# p3 %>%
-#     filter(Prscrbr_NPI == "1003012204", year == 2013) %>%
-#     dplyr::select(Prscrbr_NPI, year, class, tot_clms, Tot_Benes)
-# 
-# # Same story for 2014
-# p3 %>%
-#     filter(Prscrbr_NPI == "1003012204", year == 2014) %>%
-#     dplyr::select(Prscrbr_NPI, year, class, tot_clms, Tot_Benes) %>%
-#     arrange(year, class)
-# 
-# # Same story for 2019
-# p3 %>%
-#     filter(Prscrbr_NPI == "1003012204", year == 2019) %>%
-#     dplyr::select(Prscrbr_NPI, year, class, tot_clms, Tot_Benes) %>%
-#     arrange(year, class)
+# Second five
+fig_data %>%
+    filter(str_detect(facet_label, second_five)) %>%
+    ggplot(aes(x = Year, y = mean, ymin = lower, ymax = upper,
+               group = facet_label, color = facet_label, fill = facet_label)) +
+    geom_ribbon(alpha = 0.2, linetype = 0) +
+    geom_line() +
+    scale_x_continuous(breaks = seq(2013, 2019, 2)) +
+    scale_y_continuous(limits = c(0, 500)) +
+    facet_wrap(~ facet_label, ncol = 5) +
+    labs(x = "Year",
+         y = "Claims\nper 1K\nbeneficiaries",
+         color = "Class") +
+    theme(legend.position = "none")
+ggsave("figures/Claims 1k by class by year bottom five.png", height = 4,
+       width = 12)
 
 ```
+
+<br>
+
+***
 
 ### Source of the numerator in claims / 1K beneficiaries
 
@@ -427,87 +551,9 @@ p_vs_pd_num %>%
 
 ```
 
-## Summary tables for beneficiaries and use
-
 ```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
-
-
-```
-
-### Beneficiary tables for antibiotics and cephalosporin by year
-
-```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
-# Beneficiary table by year
-p3 %>%
-    filter(class == "Antibiotic") %>%
-    rename(Year = year) %>%
-    compute_summary_table(group = "Year") %>%
-    format_ben_table()
-
-# Beneficiary data stays the same, regardless of the class of antibiotics chosen
-p3 %>%
-    filter(class == "Cephalosporin") %>%
-    rename(Year = year) %>%
-    compute_summary_table(group = "Year") %>%
-    format_ben_table()
-```
-
-### 2019 beneficiary summaries by provider type
-
-```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
-
-# 2019 beneficiary table by provider type
-p3 %>%
-    filter(class == "Antibiotic", year == 2019) %>%
-    rename(`Provider Type` = Std_Provider_Type) %>%
-    compute_summary_table(group = "Provider Type") %>%
-    format_ben_table()
-
-# Again, beneficiary data stays the same, regardless of drug class
-p3 %>%
-    filter(class == "Cephalosporin", year == 2019) %>%
-    rename(`Provider Type` = Std_Provider_Type) %>%
-    compute_summary_table(group = "Provider Type") %>%
-    format_ben_table()
-
-```
-
-### Antibiotic & Cephalosporin use by year
-
-```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
-
-# Use table by year
-p3 %>%
-    filter(class == "Antibiotic") %>%
-    rename(Year = year) %>%
-    compute_summary_table(group = "Year") %>%
-    format_use_table()
-
-# Mean beneficiary count stays the same by year, but other cols change with a
-# different drug.
-p3 %>%
-    filter(class == "Cephalosporin") %>%
-    rename(Year = year) %>%
-    compute_summary_table(group = "Year") %>%
-    format_use_table()
-```
-
-### 2019 Antibiotic use by provider type
-
-```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
-
-# 2019 use table by provider type
-p3 %>%
-    filter(class == "Antibiotic", year == 2019) %>%
-    rename(`Provider Type` = Std_Provider_Type) %>%
-    compute_summary_table(group = "Provider Type") %>%
-    format_use_table()
-
-```
 
 ### Comparison of weighted versus unweighted means
-
-```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
 # Number of providers per year
 p3 %>%
@@ -577,219 +623,6 @@ p3 %>%
     ggplot(mapping = aes(x = year, y = mean, color = type, group = type)) +
     geom_line()
 
-```
-
-### claims_1k ~ year for each drug class
-
-CIs currently show 95% quantiles. Want to change this to a bootstrapped 95% CI on the mean.
-
-Models are OLS of claims_1k ~ year, which is not normally distributed. Looks like it's mostly zeros and probably over-dispersed.
-
-```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.height = 8, fig.width = 11}
-
-# Copy dataset
-
-# Create y response variable. y will be interpreted as the proportion of all beneficiaries that were prescribed the drug
-# p3$y <- cbind(p2$tot_clms, p2$Tot_Benes)
-
-# Model y as binomially-distributed function of year
-# fit <- glm(y ~ year, data = p3 %>% filter(class == "Antibiotic"), family = "binomial")
-
-# Not at all normal
-p3 %>%
-    filter(class == "Antibiotic") %>%
-    ggplot(aes(x = claims_1k)) +
-    geom_density()
-
-# Shows that from 50-99% of providers per year per drug have zero claims per 1k beneficiaries. So if you're interested in measuring claims per 1k out of all providers with a claim then you really don't want to log because you're dropping tons of data. If, on the other hand, you're interested in claims / 1k out of providers with *antibiotic* claims only, then it might work because you won't have any zeros.
-zeros <- p3 %>%
-    group_by(year, class) %>%
-    summarize(n_prv_zero = sum(claims_1k == 0, na.rm = TRUE),
-              n_prv_nonzero = sum(claims_1k > 0, na.rm = TRUE),
-              .groups = "drop") %>%
-    mutate(p_zero = n_prv_zero / (n_prv_zero + n_prv_nonzero))
-
-
-# Problem with logging is that you drop all of the zeros, which are potentially informative.
-# p3 %>%
-#     filter(class == "Antibiotic") %>%
-#     ggplot(aes(x = log_claims_1k)) +
-#     geom_density()
-# 
-# # Number of providers in the by-provider data
-# p %>%
-#     select(Prscrbr_NPI) %>%
-#     unique() %>%
-#     nrow()
-
-# Number of providers in the by-provider-and-drug data, who also have an antibiotic claim. For all years we have about half of providers who didn't prescribe an antibiotic. Shouldn't they be included?
-# pd %>%
-#     filter(Antibiotic == 1) %>%
-#     select(Prscrbr_NPI) %>%
-#     unique() %>%
-#     nrow()
-
-# Models of claims_1k ~ year, normal distribution
-year_effects <- map_dfr(drug_classes, function(class) {
-    class_data <- p3 %>%
-        filter(class == !!class)
-    lm(claims_1k ~ year,
-       data = class_data,
-       weights = Tot_Benes) %>%
-    tidy() %>%
-    mutate(class = class)
-}) %>%
-    mutate(
-        `p < 0.05` = if_else(p.value < 0.05, "*", "")) %>%
-    filter(term == "year") %>%
-    arrange(p.value)
-
-# Models of claims_1k ~ year, binomial distribution
-# year_effects_binomial <- map_dfr(drug_classes, function(class) {
-#     class_data <- p2 %>%
-#         filter(class == !!class)
-#     glm(claims_1k ~ year,
-#        data = class_data,
-#        weights = Tot_Benes) %>%
-#     tidy() %>%
-#     mutate(class = class)
-# }) %>%
-#     mutate(
-#         `p < 0.05` = if_else(p.value < 0.05, "*", "")) %>%
-#     filter(term == "year") %>%
-#     arrange(p.value)
-
-# Compute percent change from 2013 to 2019 (negative is decrease)
-change <- map_dfr(drug_classes, function(class) {
-    p3 %>%
-        filter(class == !!class) %>%
-        compute_summary_table(group = "year") %>%
-        dplyr::select(year, class, mean_claims_1k_wt) %>%
-        pivot_wider(names_from = "year", values_from = "mean_claims_1k_wt") %>%
-        mutate(percent_change = -(`2013` - `2019`) / `2013` * 100)
-})
-    
-# Weighted claims per 1k beneficiaries by year, where we're including providers
-# who don't have any associated antibiotic claims, rather than only including
-# those with >= 1 associated anbitiotic claim.
-map_dfr(drug_classes, function(x) {
-    p3 %>%
-        filter(class == x) %>%
-        compute_summary_table(group = "year") %>%
-        select(year, class, mean_claims_1k_wt, se_claims_1k_wt,
-               ci_claims_1k_lower, ci_claims_1k_upper, lower_ci_claims_1k_wt,
-               upper_ci_claims_1k_wt)
-}) %>%
-    left_join(year_effects, by = "class") %>%
-    left_join(change, by = "class") %>%
-    mutate(class2 = case_when(
-        `p < 0.05` == "*" & percent_change > 0 ~ paste0(
-            class, "\n",
-            round(percent_change), "% change\n",
-            "p = ", format(p.value, scientific = TRUE, digits = 3)),
-        `p < 0.05` == "*" & percent_change < 0 ~  paste0(
-            class, "\n",
-            round(percent_change), "% change\n",
-            "p = ", format(p.value, scientific = TRUE, digits = 3)),
-        TRUE ~ class),
-        class2 = fct_relevel(class2, "Other", after = Inf)) %>%
-    ggplot(mapping = aes(x = year, y = mean_claims_1k_wt, color = class2,
-                         group = class2)) +
-    geom_errorbar(aes(ymin = lower_ci_claims_1k_wt,
-                      ymax = upper_ci_claims_1k_wt),
-                  width = 0.2, size = 0.2, color = "gray50") +
-    geom_line() +
-    scale_y_continuous(limits = c(-20, 1000)) +
-    facet_wrap(~ class2, ncol = 4, scales = "free") +
-    labs(x = "Year",
-         y = "Claims\nper 1K\nbeneficiaries",
-         color = "Class") +
-    theme(legend.position = "none")
-
-```
-
-
-### Claims 1k by provider type
-
-- 2019 Antibiotic data.
-
-```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
-
-# map_dfr(drug_classes, function(x) {
-#     p3 %>%
-#         filter(class == x) %>%
-#         compute_summary_table() %>%
-#         select(
-#             year,
-#         class,
-#         Std_Provider_Type,
-#         mean_claims_1k_wt,
-#         se_claims_1k_wt,
-#         ci_claims_1k_lower,
-#         ci_claims_1k_upper,
-#         lower_ci_claims_1k_wt,
-#         upper_ci_claims_1k_wt
-#     ) }) %>%
-#     ungroup() %>%
-#     ggplot(mapping = aes(x = year, y = mean_claims_1k_wt,
-#                          color = Std_Provider_Type, group = Std_Provider_Type)) +
-#     geom_line() +
-#     facet_wrap(~ Std_Provider_Type)
-        
-p3 %>%
-    filter(class == "Antibiotic", year == 2019) %>%
-    compute_summary_table(group = "Std_Provider_Type") %>%
-    select(
-        class,
-        Std_Provider_Type,
-        mean_claims_1k_wt,
-        se_claims_1k_wt,
-        ci_claims_1k_lower,
-        ci_claims_1k_upper,
-        lower_ci_claims_1k_wt,
-        upper_ci_claims_1k_wt
-    ) %>%
-    ungroup() %>%
-    mutate(Std_Provider_Type = fct_reorder(factor(Std_Provider_Type),
-                                           mean_claims_1k_wt)) %>%
-    ggplot(mapping = aes(x = Std_Provider_Type, y = mean_claims_1k_wt)) +
-    geom_col() +
-    coord_flip()
-
-```
-
-
-```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
-
-### Missingness
-
-# Assess missingness in p2. 83% missing for Std_Provider_Type, but that's because I've only applied it to 2019 data. Bene_Feml_Cnt (and consequently percent_fem) is missing in 26% of the data. Tot_Benes is missing 8.5% of the time. Risk socre is only missing in 1%. RUCA < 1%.
-missing <- p2 %>%
-    summarize_all(~ sum(is.na(.) | is.infinite(.)) / n()) %>%
-    pivot_longer(cols = everything(), names_to = "column",
-                 values_to = "p_missing") %>%
-    arrange(desc(p_missing))
-    
-# Race counts are relatively complete for white (17% missing), but are missing
-# at ~ 50% for all other categories(black, asian, hispanic, native american)
-# missing %>%
-#     filter(str_detect(column, "Race"))
-
-
-# Check p. ~ 25% of Antbtc_Tot_Clms is missing per year. Tot_Benes is missing < 10% of the time per year (impute?), RUCA is missing < 1% per year, always have prescriber type (which means we should be able to get a standardized prescriber type everywehre, prescriber gender is always there. Beneficiary age is always there except for 8% missing in 2017. Beneficiarly female count is missing ~ 25% of the time per year (impute?), Risk score is almost always there, except for 8% missing in 2017. ARE THE 2017 missing for real, or is it a problem with how I'm processing the data?  Race white counts are missing ~ 10% of the time. Other race variables are missing ~ 50% of the time. Bene_Dual_Cnt is missing ~ 40% of the time
-p3 %>%
-    group_by(year) %>%
-    summarize_all(~ sum(is.na(.) | is.infinite(.)) / n()) %>%
-    mutate(across(where(is.double), ~ format(., digits = 2, nsmall = 2))) %>%
-    datatable()
-
-# Realistic opportunities for imputation: Tot_Benes, Female count/percent female. Maybe race white counts?
-
-# Shows that we have no NAs in pd data. This is a bit misleading though, since instead of coding Tot_Clms < 11 as NA, they're just excluded from the dataset. This is probably the main factor that leads to lower claims counts in the pd dataset, and consequently lower claims per 1k beneficiaries when computing using the pd claims counts.
-# pd2 %>%
-#     group_by(year, class) %>%
-#     summarize_all(~ sum(is.na(.)) / n()) %>%
-#     summary()
 ```
 
 
@@ -1354,8 +1187,8 @@ p2019.2 %>%
 ## Details
 
 - All data in this section are from the [Medicare Part D Prescribers by Provider dataset](https://data.cms.gov/provider-summary-by-type-of-service/medicare-part-d-prescribers/medicare-part-d-prescribers-by-provider).
-- The outcome variable, log(Claims/1K Beneficiaries), was modeled as normally-distributed. All values of Antbtc_Tot_Clms < 11 were excluded.
-- Missing values of Tot_Benes were imputed as 10.
+- Wows with fewer than 11 antibiotic claims or beneficiaries were excluded.
+- The outcome variable, log(Claims/1K Beneficiaries), was modeled as normally-distributed.
 - All secondary codes were stripped from Prscrbr_RUCA--e.g., 4.1 became 4.
 
 ## Bivariate relationships
@@ -1640,7 +1473,7 @@ m6 <- lm(log_claims_1k ~ 1 +
        Bene_Prop_White,
    data = gm2019)
 
-# Not statsig different, so remove squared prop white
+# Statsig different, so retain Bene_Prop_Fem^2 (more complex m5)
 anova(m5, m6, test = "Chisq")
 
 ```
@@ -1667,6 +1500,36 @@ m7 <- lm(log_claims_1k ~ 1 +
 # Not statsig different, so remove squared prop white
 anova(m5, m7, test = "Chisq")
 
+
+```
+
+<br>
+
+***
+
+### AIC comparisons
+
+The AIC table below indicates that 51% of the model weight is carried by *m5*. Further, the AIC difference between *m5* and the next best model (*m3*) is greater than two, indicating a significantly better fit for *m5*.
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Snipped showing how to report AIC results from (https://www.scribbr.com/statistics/akaike-information-criterion/):
+# "We used AIC model selection to distinguish among a set of possible models describing the relationship between age, sex, sweetened beverage consumption, and body mass index. The best-fit model, carrying 96% of the cumulative model weight, included every parameter with no interaction effects."
+
+# Another snippet: "If a model is more than 2 AIC units lower than another, then it is considered significantly better than that model."
+
+# AIC: can I just do all models at once. Shows that m5 gets 51% of weight, with m3 and m2 each getting 18%.
+mod_list <- list("m1" = m1, "m2" = m2, "m3" = m3, "m4" = m4, "m5" = m5,
+                 "m6" = m6, "m7" = m7)
+aictab(cand.set = mod_list)
+
+# Confidence set. Looks like this just returns the set of models where weight sums to >= 95% (or whatever the confidence level is set to).
+# confset(cand.set = mod_list)
+
+# Evidence ratios. Indicates that m5 is 2.79 times more parsimonious than m3 (the next best model).
+# aic_table <- aictab(cand.set = mod_list)
+# evidence(aic.table = aic_table)
+
 ```
 
 <br>
@@ -1677,11 +1540,106 @@ anova(m5, m7, test = "Chisq")
 
 The final model (*m5*) is shown below. All higher order terms that did not improve model fit have been removed. All remaining terms except for Prscrbr_RUCA_fct8 are statistically significant.
 
-```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 5, fig.height = 4}
 
-summary(m5)
+# m5 summary
+m5.sum <- m5 %>%
+    tidy() %>%
+    mutate(across(matches("estimate|std.error|statistic"),
+                  ~ as.character(round(., digits = 2))),
+           p.value = format(p.value, scientific = TRUE, digits = 2))
+
+# First 8 terms
+m5.sum %>%
+    filter(row_number() %in% 1:8) %>%
+    datatable(
+        rownames = FALSE,
+        colnames = c("Term", "Estimate", "SE", "t", "p"),
+        options = list(dom = "t",
+                       pageLength = nrow(m5 %>% tidy())))
+
+# Last 7 terms
+m5.sum %>%
+    filter(row_number() %in% 9:nrow(m5.sum)) %>%
+    datatable(
+        rownames = FALSE,
+        colnames = c("Term", "Estimate", "SE", "t", "p"),
+        options = list(dom = "t",
+                       pageLength = nrow(m5 %>% tidy())))
+
+# Fit separate models by year using the same set of predictors, collect fitted
+# values.
+years <- gm %>% pull(Year) %>% unique()
+fit_gm_year <- map_dfr(years, function(year) {
+    data <- gm %>%
+        filter(Year == !!year,
+               Prscrbr_County != "Not ID")
+    fit <- lm(log_claims_1k ~ 1 +
+       Prscrbr_RUCA_fct +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Avg_Age +
+       I(Bene_Avg_Age^2) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White,
+   data = data)
+    data %>%
+        mutate(fitted_log_claims_1k = fitted(fit),
+               fitted_claims_1k = exp(fitted_log_claims_1k))
+})
+
+gm2019 <- fit_gm_year %>%
+    filter(Year == 2019)
+
+# Figure of fitted versus observed values
+min_axis <- if_else(min(gm2019$fitted_log_claims_1k) < min(gm2019$log_claims_1k),
+                    min(gm2019$fitted_log_claims_1k), min(gm2019$log_claims_1k))
+max_axis <- if_else(max(gm2019$fitted_log_claims_1k) > max(gm2019$log_claims_1k),
+                    max(gm2019$fitted_log_claims_1k), max(gm2019$log_claims_1k))
+rsq <- format(glance(m5) %>% pull(r.squared), digits = 2, nsmall = 2)
+gm2019 %>%
+    ggplot(aes(x = fitted_log_claims_1k, y = log_claims_1k)) +
+    geom_point(alpha = 0.2) +
+    geom_abline(intercept = 0, slope = 1, color = "blue", size = 0.2) +
+    scale_x_continuous(limits = c(min_axis, max_axis)) +
+    scale_y_continuous(limits = c(min_axis, max_axis)) +
+    labs(subtitle = paste0("N = ", nrow(gm2019), ", r-squared = ", rsq),
+         x = "Fitted prescribing rate",
+         y = "Observed\nprescribing\nrate")
+
+# Model with linear terms only
+m8 <- lm(log_claims_1k ~ 1 +
+       Prscrbr_RUCA_fct +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       Bene_Avg_Age +
+       Bene_Prop_Fem +
+       Bene_Prop_White,
+   data = gm2019)
 
 ```
+
+<br>
+
+***
+
+### Linear terms only
+
+The AIC comparison below indicates that a simpler model with linear terms only---called *m8*---carries 0% of the weight when compared to *m5*.
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+# AIC
+mod_list <- list("m1" = m1, "m2" = m2, "m3" = m3, "m4" = m4, "m5" = m5,
+                 "m6" = m6, "m7" = m7, "m8" = m8)
+aictab(cand.set = mod_list)
+
+```
+
+*m5* and *m8* have r-squared values of `r round(glance(m5)$r.squared, digits = 2)` and `r round(glance(m8)$r.squared, digits = 2)`, respectively.
 
 <br>
 
@@ -1747,6 +1705,10 @@ by_year_gm
 
 ```
 
+<br>
+
+***
+
 ## Coefficients by year
 
 The figure below indicates that coefficients for models fit to general medicine data are relatively stable across years.
@@ -1797,6 +1759,112 @@ by_year_gm_coef %>%
 
 ```
 
+<br>
+
+***
+
+## Validation
+
+Here I'm focusing on the out-of-sample predictive validity of *m5*---which includes squared and cubed terms---versus *m8*---which includes linear terms only. Both models were trained on 2019 data, then tested on their ability to predict log(claims_1k) for the years 2013-2018. The figure below indicates that predictions from *m5* have consistently lower RMSE and higher r-squared than predictions from *m8*.
+
+```{r, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 9, fig.height = 4}
+
+# Validate GM model by training on 2019, testing on 2013-2018. Want to compare
+# m5 (model preferred by log-likelihood & AIC comparison) versus m8 (linear
+# terms only).
+
+# Training and test sets
+train <- p3 %>%
+    filter(Year == 2019,
+           Prscrbr_Type_Std == "General Medicine")
+test <- p3 %>% filter(Year != 2019, Prscrbr_Type_Std == "General Medicine")
+
+# Separate test sets per year
+test_2018 <- p3 %>% filter(Year != 2018, Prscrbr_Type_Std == "General Medicine")
+test_2017 <- p3 %>% filter(Year != 2017, Prscrbr_Type_Std == "General Medicine")
+test_2016 <- p3 %>% filter(Year != 2016, Prscrbr_Type_Std == "General Medicine")
+test_2015 <- p3 %>% filter(Year != 2015, Prscrbr_Type_Std == "General Medicine")
+test_2014 <- p3 %>% filter(Year != 2014, Prscrbr_Type_Std == "General Medicine")
+test_2013 <- p3 %>% filter(Year != 2013, Prscrbr_Type_Std == "General Medicine")
+
+# Model specification & engine
+lm_model <- linear_reg() %>%
+    set_engine("lm")
+
+# Fit m5
+fit_m5 <- lm_model %>%
+    fit(log_claims_1k ~ 1 +
+       # Prscrbr_RUCA_fct +
+       Prscrbr_RUCA +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
+       Bene_Avg_Age +
+       I(Bene_Avg_Age^2) +
+       Bene_Prop_Fem +
+       I(Bene_Prop_Fem^2) +
+       Bene_Prop_White,
+       data = train)
+
+# Fit m8
+fit_m8 <- lm_model %>%
+    fit(log_claims_1k ~ 1 +
+       # Prscrbr_RUCA_fct +
+       Prscrbr_RUCA +
+       Prscrbr_Gndr +
+       Bene_Avg_Risk_Scre +
+       Bene_Avg_Age +
+       Bene_Prop_Fem +
+       Bene_Prop_White,
+       data = train)
+
+# Store test set predictions from each model
+test$m5_pred <- predict(fit_m5, new_data = test) %>% pull(.pred)
+test$m8_pred <- predict(fit_m8, new_data = test) %>% pull(.pred)
+
+# Predictions per year
+test_2018$m5_pred <- predict(fit_m5, new_data = test_2018) %>% pull(.pred)
+test_2018$m8_pred <- predict(fit_m8, new_data = test_2018) %>% pull(.pred)
+test_2017$m5_pred <- predict(fit_m5, new_data = test_2017) %>% pull(.pred)
+test_2017$m8_pred <- predict(fit_m8, new_data = test_2017) %>% pull(.pred)
+test_2016$m5_pred <- predict(fit_m5, new_data = test_2016) %>% pull(.pred)
+test_2016$m8_pred <- predict(fit_m8, new_data = test_2016) %>% pull(.pred)
+test_2015$m5_pred <- predict(fit_m5, new_data = test_2015) %>% pull(.pred)
+test_2015$m8_pred <- predict(fit_m8, new_data = test_2015) %>% pull(.pred)
+test_2014$m5_pred <- predict(fit_m5, new_data = test_2014) %>% pull(.pred)
+test_2014$m8_pred <- predict(fit_m8, new_data = test_2014) %>% pull(.pred)
+test_2013$m5_pred <- predict(fit_m5, new_data = test_2013) %>% pull(.pred)
+test_2013$m8_pred <- predict(fit_m8, new_data = test_2013) %>% pull(.pred)
+
+# m5 has lower error (rmse & mae) and higher rsq than m8, indicating better
+# out-of-sample predictive accuracy when squared and cubed terms are included.
+# metrics(test, log_claims_1k, m5_pred)
+# metrics(test, log_claims_1k, m8_pred)
+
+# Per year metrics
+bind_rows(
+metrics(test_2018, log_claims_1k, m5_pred) %>% mutate(Year = 2018, model = "m5"),
+metrics(test_2018, log_claims_1k, m8_pred) %>% mutate(Year = 2018, model = "m8"),
+metrics(test_2017, log_claims_1k, m5_pred) %>% mutate(Year = 2017, model = "m5"),
+metrics(test_2017, log_claims_1k, m8_pred) %>% mutate(Year = 2017, model = "m8"),
+metrics(test_2016, log_claims_1k, m5_pred) %>% mutate(Year = 2016, model = "m5"),
+metrics(test_2016, log_claims_1k, m8_pred) %>% mutate(Year = 2016, model = "m8"),
+metrics(test_2015, log_claims_1k, m5_pred) %>% mutate(Year = 2015, model = "m5"),
+metrics(test_2015, log_claims_1k, m8_pred) %>% mutate(Year = 2015, model = "m8"),
+metrics(test_2014, log_claims_1k, m5_pred) %>% mutate(Year = 2014, model = "m5"),
+metrics(test_2014, log_claims_1k, m8_pred) %>% mutate(Year = 2014, model = "m8"),
+metrics(test_2013, log_claims_1k, m5_pred) %>% mutate(Year = 2013, model = "m5"),
+metrics(test_2013, log_claims_1k, m8_pred) %>% mutate(Year = 2013, model = "m8")) %>%
+    filter(.metric != "mae") %>%
+    mutate(.metric = if_else(.metric == "rmse", "RMSE", "R-Squared")) %>%
+    ggplot(aes(x = Year, y = .estimate, group = model, color = model)) +
+    geom_line() +
+    facet_wrap(~ .metric) +
+    scale_color_discrete(name = "Model") +
+    labs(y = "Estimate")
+
+```
 
 ```{r, eval = FALSE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
@@ -1961,26 +2029,10 @@ This map shows county-related differences in anbitiotic prescribing rates. Light
 
 ```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
 
-fit_gm_year <- map_dfr(years, function(year) {
-    data <- gm %>%
-        filter(Year == !!year,
-               Prscrbr_County != "Not ID")
-    fit <- lm(log_claims_1k ~ 1 +
-       Prscrbr_RUCA_fct +
-       Prscrbr_Gndr +
-       Bene_Avg_Risk_Scre +
-       I(Bene_Avg_Risk_Scre^2) +
-       I(Bene_Avg_Risk_Scre^3) +
-       Bene_Avg_Age +
-       I(Bene_Avg_Age^2) +
-       Bene_Prop_Fem +
-       I(Bene_Prop_Fem^2) +
-       Bene_Prop_White,
-   data = data)
-    data %>%
-        mutate(fitted_log_claims_1k = fitted(fit),
-               fitted_claims_1k = exp(fitted_log_claims_1k))
-})
+# Write table of 2019 general medicine OE ratios to Box
+gm2019_oe <- fit_gm_year %>%
+    filter(Year == 2019) %>%
+    mutate(oe = claims_1k / fitted_claims_1k)
 
 # Compute O/E by year and county. 39 counties represented.
 county_yr_oe <- fit_gm_year %>%
@@ -2074,7 +2126,7 @@ plot_ly() %>%
 
 ***
 
-### Observed/ Expected
+### Observed/Expected
 
 This map shows county-related differences in antibiotic prescribing rates after controlling for provider gender and rurality, and beneficiary age, health status, proportion female, and proportion white.
 
@@ -2146,6 +2198,58 @@ plot_ly() %>%
 
 ```
 
+<br>
+
+***
+
+## 2019 caterpillar plot
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 11}
+
+# 2019 general medicine dotplot
+gm2019 <- fit_gm_year %>%
+    filter(Year == 2019) %>%
+    mutate(oe = claims_1k / fitted_claims_1k,
+           Prscrbr_NPI = fct_reorder(Prscrbr_NPI, -oe))
+gm2019 %>%
+    filter(oe < 6) %>%
+    ggplot(aes(x = Prscrbr_NPI, y = oe)) +
+    geom_point(color = "dodgerblue", alpha = .2) +
+    geom_hline(yintercept = 1, linetype = "dashed", size = .2) +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          panel.grid.major.x = element_blank()) +
+    labs(title = "Standardized Prescribing Ratios for 2019 Idaho General Medicine Providers",
+         subtitle = paste("N =", nrow(gm2019)),
+         x = "Provider",
+         y = "Observed/Expected\nClaims per 1K\nBeneficiaries")
+ggsave("figures/General medicine 2019 dot.png", height = 5, width = 11)
+
+# 2019 general medicine barplot
+gm2019 <- fit_gm_year %>%
+    filter(Year == 2019) %>%
+    mutate(oe = claims_1k / fitted_claims_1k,
+           Prscrbr_NPI = fct_reorder(Prscrbr_NPI, -oe))
+gm2019 %>%
+    filter(oe < 6) %>%
+    ggplot(aes(x = Prscrbr_NPI, y = oe)) +
+    geom_col(fill = "dodgerblue", alpha = .5) +
+    geom_hline(yintercept = 1, linetype = "dashed", size = .2) +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          panel.grid.major.x = element_blank()) +
+    labs(title = "Standardized Prescribing Ratios for 2019 Idaho General Medicine Providers",
+         subtitle = paste("N =", nrow(gm2019)),
+         x = "Provider",
+         y = "Observed/Expected\nClaims per 1K\nBeneficiaries")
+ggsave("figures/General medicine 2019 bar.png", height = 5, width = 11)
+
+```
+
+<br>
+
+***
+
 # Emergency medicine
 
 ```{r, eval = TRUE, echo = TRUE, error = FALSE, message = FALSE, warning = FALSE}
@@ -2178,7 +2282,7 @@ em2019 <- em2019 %>%
         str_detect(place, "Kootenai") ~ "Kootenai",
         str_detect(place, "EIRMC") ~ "EIRMC",
         str_detect(place, "Joseph") ~ "St. Joseph",
-        str_detect(place, "Madison") ~ "Madison Memorial Hospital",
+        str_detect(place, "Madison") ~ "Madison Memorial",
         str_detect(place, "Bonner") ~ "Bonner General Health",
         str_detect(place, "Boundary") ~ "Boundary Community Hospital",
         str_detect(place, "Cassia") ~ "Cassia Regional Hospital",
@@ -2205,14 +2309,52 @@ em2019 %>%
     geom_boxplot() +
     coord_flip()
 
-# Simple model indicates that no levels or org are different than baseline
-# (EIRMC).
-em1 <- lm(
-    log_claims_1k ~ 1 +
-        org,
-    data = em2019 %>%
-        filter(org %in% orgs))
-summary(em1)
+```
+
+
+```{r, eval = TRUE, echo = TRUE, error = FALSE, message = FALSE, warning = FALSE, fig.height = 5, fig.width = 10}
+
+# Same as above, but claims 1k rather than log(claims 1k)
+em2019 %>%
+    filter(org %in% orgs) %>%
+    left_join(em2019 %>%
+                  filter(org %in% orgs) %>%
+                  count(org), by = "org") %>%
+    mutate(org = paste0(org, "\nN = ", n),
+           org = fct_reorder(org, claims_1k)) %>%
+    
+    ggplot(aes(x = org, y = claims_1k)) +
+    geom_boxplot() +
+    coord_flip() +
+    theme(axis.title.y = element_blank()) +
+    labs(title = "2019 emergency medicine antibiotic prescribing rate by healthcare system",
+         y = "Claims per 1K beneficiaries")
+ggsave("figures/2019 emergency medicine antibiotic prescribing rate by healthcare system.png", height = 5, width = 11)
+
+```
+
+```{r, eval = TRUE, echo = TRUE, error = FALSE, message = FALSE, warning = FALSE}
+
+# Simple model of log_claims_1k ~ org, with Madison Memorial--the org with the lowest median--set to baseline. Results show that even the level with the highest median--Portneuf--isn't statistically different from baseline, p = 0.29.
+
+# Data
+em2019.2 <- em2019 %>%
+    filter(org %in% orgs) %>%
+    mutate(org = fct_relevel(org, "Kootenai"))
+
+# Dummy coding for org with contrasts for each level versus Kootenai. Choosing
+# Kootenai as the baseline since it has nearly the lowest median and a fair
+# amount of data. Shows that both Portneuf andSt. Al's have statistically higher
+# prescribing rates, p = 0.034 and p = 0.036, respectively. The St. Al's result might be driven by three outliers (see figure).
+lm(log_claims_1k ~ 1 + org, data = em2019.2) %>%
+    summary()
+
+# Alternatively, set up weighted effects coding where each level is compared to
+# the grand mean. Shows that Kootenai is marginally lower than the grand mean, p
+# = 0.052. All other comparisons are null.
+contrasts(em2019.2$org) <- contr.wec(em2019.2$org, omitted = "Madison Memorial")
+lm(log_claims_1k ~ 1 + org, data = em2019.2) %>%
+    summary()
 
 # Look at bivariate relationships
 # RUCA
@@ -2412,7 +2554,7 @@ em10 <- lm(log_claims_1k ~ 1 +
        filter(org %in% orgs))
 anova(em9, em10, test = "Chisq")
 
-# Evidenc to drop white
+# Evidence to drop white
 em11 <- lm(log_claims_1k ~ 1 +
        Bene_Avg_Risk_Scre +
        I(Bene_Avg_Risk_Scre^2) +
@@ -2433,10 +2575,12 @@ em12 <- lm(log_claims_1k ~ 1 +
        filter(org %in% orgs))
 anova(em11, em12, test = "Chisq")
 
-# Check squared fem again. Evidence still indicates it should be kept.
+# Check squared fem again. Evidence still indicates it should be
+# kept--marginally improves fit..
 em13 <- lm(log_claims_1k ~ 1 +
        Bene_Avg_Risk_Scre +
        I(Bene_Avg_Risk_Scre^2) +
+       I(Bene_Avg_Risk_Scre^3) +
        Bene_Prop_Fem,
    data = em2019 %>%
        filter(org %in% orgs))
@@ -2454,6 +2598,132 @@ tibble(fitted = fitted(em11),
 # Note that even though we dropped org from the final model it could still be
 # that orgs (e.g., St. Luke's versus St. Al's) matter in interaction with other
 # predictors.
+
+```
+
+<br>
+
+***
+
+## AIC comparisons
+
+Although *em11* accounts for the most model weight, the next two models---*em10* and *em9* are both within two units. 
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+em_mod_list <- list(
+    "em1" = em1, "em2" = em2, "em3" = em3, "em4" = em4, "em5" = em5,
+    "em6" = em6, "em7" = em7,"em8" = em8, "em9" = em9, "em10" = em10,
+    "em11" = em11)
+aictab(cand.set = em_mod_list)
+
+```
+
+<br>
+
+When comparing *em11* versus a model with linear terms only (*em14*) we see that *em11* is heavily favored:
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+em14 <- lm(log_claims_1k ~ 1 +
+       Bene_Avg_Risk_Scre +
+       Bene_Prop_Fem,
+   data = em2019 %>%
+       filter(org %in% orgs))
+
+# All candidates
+em_mod_list <- list(
+    "em1" = em1, "em2" = em2, "em3" = em3, "em4" = em4, "em5" = em5,
+    "em6" = em6, "em7" = em7,"em8" = em8, "em9" = em9, "em10" = em10,
+    "em11" = em11, "em14" = em14)
+aictab(cand.set = em_mod_list)
+
+# Just 11 versus 14
+em_mod_list <- list("em11" = em11, "em14" = em14)
+aictab(cand.set = em_mod_list)
+
+```
+
+<br>
+
+*em11* also fits the training data better:
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE}
+
+bind_rows(
+    glance(em11) %>%
+        mutate(model = "em11"),
+    glance(em14) %>%
+        mutate(model = "em14")) %>%
+    select(model, r.squared)
+
+```
+
+<br>
+
+***
+
+## 2019 caterpillar
+
+```{r, eval = TRUE, echo = FALSE, error = FALSE, message = FALSE, warning = FALSE, fig.width = 11}
+
+# 2019 emergency medicine
+# Add in fitted and compute OE
+em2019.1 <- em2019 %>%
+       filter(org %in% orgs)
+em2019.1$fitted_log_claims_1k <- fitted(em11)
+em2019.1 <- em2019.1 %>%
+    mutate(fitted_claims_1k = exp(fitted_log_claims_1k),
+           oe = claims_1k / fitted_claims_1k)
+
+# Table of 2019 emergency medicine OE ratios
+em2019_oe <- em2019.1 %>%
+    filter(Year == 2019)
+
+# Write list of named dataframes to excel. These will end up as separate tabs.
+list("General Medicine" = gm2019_oe %>%
+         select(Year:Prscrbr_RUCA, Prscrbr_Gndr,
+                Prscrbr_Address = dataset_address, Prscrbr_County:claims_1k,
+                fitted_claims_1k, OE_ratio = oe),
+     "Emergency Medicine" = em2019_oe %>%
+         select(Year:Prscrbr_RUCA, Prscrbr_Gndr,
+                Prscrbr_Address = dataset_address, Prscrbr_County:claims_1k,
+                fitted_claims_1k, OE_ratio = oe)) %>%
+    write_xlsx(paste0(box_dir, "Idaho 2019 OE ratios.xlsx"))
+
+# Dotplot
+em2019.1 %>%
+    mutate(Prscrbr_NPI = fct_reorder(Prscrbr_NPI, -oe)) %>%
+    ggplot(aes(x = Prscrbr_NPI, y = oe)) +
+    geom_point(color = "dodgerblue", alpha = 0.5) +
+    geom_hline(yintercept = 1, linetype = "dashed", size = .2) +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          panel.grid.major.x = element_blank()) +
+    labs(title = "Standardized Prescribing Ratios for 2019 Idaho Emergency Medicine Providers",
+         subtitle = paste("N =", nrow(em2019.1)),
+         x = "Provider",
+         y = "Observed/Expected\nClaims per 1K\nBeneficiaries")
+ggsave("figures/Emergency medicine 2019 dot.png", height = 5,
+       width = 11)
+
+# Barplot
+em2019.1 %>%
+    mutate(fitted_claims_1k = exp(fitted_log_claims_1k),
+           oe = claims_1k / fitted_claims_1k,
+           Prscrbr_NPI = fct_reorder(Prscrbr_NPI, -oe)) %>%
+    ggplot(aes(x = Prscrbr_NPI, y = oe)) +
+    geom_col(fill = "dodgerblue", alpha = .5) +
+    geom_hline(yintercept = 1, linetype = "dashed", size = .2) +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          panel.grid.major.x = element_blank()) +
+    labs(title = "Standardized Prescribing Ratios for 2019 Idaho Emergency Medicine Providers",
+         subtitle = paste("N =", nrow(em2019.1)),
+         x = "Provider",
+         y = "Observed/Expected\nClaims per 1K\nBeneficiaries")
+ggsave("figures/Emergency medicine 2019 bar.png", height = 5,
+       width = 11)
 
 ```
 
