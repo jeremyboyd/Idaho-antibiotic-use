@@ -29,7 +29,7 @@ filter <- dplyr::filter
 select <- dplyr::select
 summarize <- dplyr::summarize
 layout <- plotly::layout
-fromJSON <- rjson::fromJSON
+fromJSON <- jsonlite::fromJSON
 
 # For fitting bayesian models
 options(mc.cores = parallel::detectCores())
@@ -171,7 +171,7 @@ get_data <- function(version_table) {
                 appendLF = FALSE)
         
         # Create URL. the "data.json" portion means that all data will be
-        # returned as a single JSON (no pagination). Filters are start with
+        # returned as a single JSON (no pagination). Filters start with
         # "?filter". Here I'm filtering to only Idaho data.
         url <- paste0("https://data.cms.gov/data-api/v1/dataset/",
                       uuid,
