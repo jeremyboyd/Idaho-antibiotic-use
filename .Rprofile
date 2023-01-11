@@ -242,8 +242,8 @@ get_data <- function(version_table) {
 
 # Function that uses the Google Places API to map from addresses to place names.
 # Takes a dataset with these address fields as input: Prscrbr_St1, Prscrbr_St2,
-# Prscrbr_City, Prscrbr_State_Abrvtn. Outputs a table relating each unique
-# address in the input to a name returned from Google.
+# Prscrbr_City, Prscrbr_State_Abrvtn, Prscrbr_Zip5. Outputs a table relating
+# each unique address in the input to a name returned from Google.
 get_address_names <- function(input_table) {
     
     # Organize input table
