@@ -26,7 +26,7 @@ knitr::opts_chunk$set(message = FALSE)
 - Provider addresses were submitted to the Google Places API to retrieve organization names.
 - Terry Reilly clinics are organizations with "Terry" in their names. This identified the ten different clinics shown in the figures below.
 - Providers were categorized as either *medical* or *dental*. Medical providers are medical doctors, physician assistants, nurse practitioners, or certified nurse specialists. Dental providers are dentists. 68 medical or dental providers were identified.
-- Each provider had their number of antibiotic claims per 1K beneficiaries computed. 16 providers ended up with NA values for claims/1K due to either NAs in their antibiotic claims count or their beneficiaries count. NA values for these variables indicate counts less than 11.
+- Each provider had their number of antibiotic claims per 1K beneficiaries computed. 16 providers ended up with NA values for claims/1K due to either NAs in their antibiotic claims count, or their beneficiaries count. NA values for these variables indicate counts less than 11.
 - In the analyses below, two datasets were used. In one, all NA values for antibiotic claims/1K were removed. In the other, NA values for claims/1K were imputed in the following way: NA values for the antibiotic claims count and the beneficiaries count were imputed as 10. The number of claims per 1K beneficiaries was then computed from these.
 
 ```{r data}
@@ -139,7 +139,7 @@ clinic_sum %>%
 
 ## Medical & dental separated
 
-Figures 2 and 3 show the same data as Figure 1, but with either medical providers only or dental providers only. This makes it easier to see which clinics have higher or lower values of claims/1K.
+Figures 2 and 3 show the same data as Figure 1, but with either medical providers only, or dental providers only. This makes it easier to see which clinics have higher or lower values of claims/1K.
 
 ```{r clinic_med, fig.cap = "Figure 2. Clinic means for medical providers only."}
 
