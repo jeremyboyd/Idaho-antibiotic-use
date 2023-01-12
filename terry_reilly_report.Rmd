@@ -1,0 +1,217 @@
+---
+title: "Terry Reilly Clinics"
+author:
+    - Jeremy Boyd, Ph.D.
+    - jeremyboyd@pm.me
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+    html_document:
+        theme: spacelab
+        toc: true
+        toc_float: true
+---
+
+```{r setup, include = FALSE}
+
+knitr::opts_chunk$set(dev = "svg")
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+
+```
+
+# Data
+
+- Data are from the 2020 Medicare Part D by-provider dataset.
+- Provider addresses were submitted to the Google Places API to retrieve organization names.
+- Terry Reilly clinics are organizations with "Terry" in their names. This identified the ten different clinics shown in the figures below.
+- Providers were categorized as either *medical* or *dental*. Medical providers are medical doctors, physician assistants, nurse practitioners, or certified nurse specialists. Dental providers are dentists. 68 medical or dental providers were identified.
+- Each provider had their number of claims per 1K beneficiaries computed. 16 providers ended up with NA values for claims/1K due to either NAs in their antibiotic claims count or their beneficiaries count. NA values for these variables indicate counts less than 11.
+- In the analyses below, two datasets were used. In one, all NA values for claims/1K were removed. In the other, NA values for claims/1K were imputed in the following way: NA values for the antibiotic claims count and the beneficiaries count were imputed as 10. The number of claims per 1K beneficiaries was then computed from these.
+
+```{r data}
+
+# Read in 2020 by-provider data
+df <- read_feather("Idaho prescribers by provider data.feather") %>%
+    filter(year == 2020)
+
+# Make sure all addresses have been queried in Google Places API
+get_address_names(input_table = df)
+
+# Read in place names
+places <- read_feather("Address-name bank.feather")
+
+# Clean up & organize data
+df2 <- df %>%
+    
+    # Join place names to data by dataset address
+    mutate(
+        dataset_address = str_squish(
+            paste(
+                Prscrbr_St1,
+                Prscrbr_St2,
+                Prscrbr_City,
+                Prscrbr_State_Abrvtn,
+                Prscrbr_Zip5
+            )
+        )) %>%
+    left_join(places %>% select(dataset_address, name, status),
+              by = "dataset_address") %>%
+    rename(Clinic = name) %>%
+    
+    # Filter to Terry Reilly clinics
+    filter(str_detect(Clinic, "Terry")) %>%
+    
+    # Categorize providers into medical & dental
+    mutate(provider_cat = case_when(
+        Prscrbr_Type %in%
+            c("Family Practice", "Physician Assistant", "Nurse Practitioner",
+              "Certified Clinical Nurse Specialist") ~ "Medical",
+        Prscrbr_Type %in% c("Dentist") ~ "Dental",
+        TRUE ~ Prscrbr_Type)) %>%
+    
+    # Keep only medical & dental providers
+    filter(provider_cat %in% c("Medical", "Dental")) %>%
+        
+    # Clean up clinic info. One Boise dentist seems to have given his home
+    # address, but web searches show he's at the Boise dental clinic. Another
+    # clinic--simply called "Terry Reilly Health Services"--has a 16th Ave Nampa
+    # address, so group it with 16th Ave Clinic.
+    mutate(Clinic = case_when(
+        dataset_address == "2301 N 26th St Ste 102 Boise ID 83702" ~
+            "Terry Reilly Health Services - Boise Dental",
+        Clinic == "Terry Reilly Health Services" ~
+            "Terry Reilly Health Services - 16th Ave. Clinic",
+        TRUE ~ Clinic),
+        
+        # Simplify clinic names & order
+        Clinic = str_remove(Clinic, ".+ - "),
+        
+        # Flag for missing claims_1k
+        claims_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000),
+        low_count = if_else(is.na(claims_1k), 1L, 0L),
+          
+        # Impute missing counts as 10
+        across(.cols = c("Antbtc_Tot_Clms", "Tot_Benes"),
+               ~ if_else(is.na(.x), 10, .x)),
+        
+        # Recompute claims_1k
+        claims_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000))
+
+# Create a single table containing two datasets: one with NA values of claims_1k
+# removed, and one with them imputed.
+df3 <- bind_rows(
+    df2 %>% mutate(dataset = "NAs_imputed"),
+    df2 %>% filter(low_count != 1) %>% mutate(dataset = "NAs_removed"))
+
+```
+
+***
+
+# Antibiotic use by clinic
+
+## All providers
+
+Figure 1 shows mean antibiotic claims per 1K beneficiaries by clinic and provider type. Additionally, the columns show results for the datasets with NAs imputed (left) and removed (right). The value to the right of each bar indicates the number of providers.
+
+```{r clinic, fig.height = 7, fig.cap = "Figure 1. Clinic means for all providers."}
+
+# Compute mean claims_1k by dataset, clinic, provider_cat
+clinic_sum <- df3 %>%
+    group_by(Clinic, provider_cat, dataset) %>%
+    summarize(n = sum(!is.na(claims_1k)),
+              mean_claims_1k = mean(claims_1k, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(Clinic = fct_rev(Clinic))
+        
+# Visualize
+clinic_sum %>%
+    ggplot(aes(y = Clinic, x = mean_claims_1k, label = n)) +
+    geom_col(fill = "lightskyblue", alpha = .6) +
+    geom_text(nudge_x = 40, size = 3) +
+    facet_grid(rows = vars(provider_cat),
+               cols = vars(dataset)) +
+    labs(x = "Mean Claims per 1K Beneficiaries")
+
+```
+
+***
+
+## Medical & dental separated
+
+Figures 2 and 3 show the same data as Figure 1, but with either medical providers only or dental providers only. This makes it easier to see which clinics have higher or lower values of claims/1K.
+
+```{r clinic_med, fig.cap = "Figure 2. Clinic means for medical providers only."}
+
+# Medical providers only
+clinic_sum %>%
+    filter(provider_cat == "Medical") %>%
+    mutate(Clinic = fct_reorder(Clinic, mean_claims_1k)) %>%
+    ggplot(aes(y = Clinic, x = mean_claims_1k, label = n)) +
+    geom_col(fill = "lightskyblue", alpha = .6) +
+    geom_text(nudge_x = 30, size = 3.5) +
+    facet_wrap(~ dataset) +
+    labs(title = "Medical Providers",
+         x = "Mean Claims per 1K Beneficiaries")
+
+```
+
+***
+
+```{r clinic_dent, fig.cap = "Figure 3. Clinic means for dental providers only."}
+
+# Medical providers only
+clinic_sum %>%
+    filter(provider_cat == "Dental") %>%
+    mutate(Clinic = fct_reorder(Clinic, mean_claims_1k)) %>%
+    ggplot(aes(y = Clinic, x = mean_claims_1k, label = n)) +
+    geom_col(fill = "lightskyblue", alpha = .6) +
+    geom_text(nudge_x = 30, size = 3.5) +
+    facet_wrap(~ dataset) +
+    labs(title = "Dental Providers",
+         x = "Mean Claims per 1K Beneficiaries")
+
+```
+
+***
+
+# Antibiotic use by provider
+
+Figures 4 and 5 give antibiotic claims/1K for indiviudal medical and dental providers, respectively.
+
+- Figures are based on the dataset with no imputation.
+- Provider NPIs are not shown.
+- The figures are shown on the same scale to facilitate comparison.
+
+```{r provider_med, fig.cap = "Figure 4. Claims/1K for individual medical providers."}
+
+df3 %>%
+    filter(provider_cat == "Medical",
+           dataset == "NAs_removed") %>%
+    mutate(Prscrbr_NPI = fct_reorder(Prscrbr_NPI, -claims_1k)) %>%
+    ggplot(aes(x = Prscrbr_NPI, y = claims_1k)) +
+    geom_col(fill = "lightskyblue", alpha = .6) +
+    scale_y_continuous(limits = c(0, 1400), breaks = seq(0, 1400, 200)) +
+    theme(axis.text.x = element_blank()) +
+    labs(title = "Medical Providers",
+         x = "Provider NPI",
+         y = "Claims per\n1K Beneficiaries")
+
+```
+
+***
+
+```{r provider_dent, fig.cap = "Figure 5. Claims/1K for individual dental providers"}
+df3 %>%
+    filter(provider_cat == "Dental",
+           dataset == "NAs_removed") %>%
+    mutate(Prscrbr_NPI = fct_reorder(Prscrbr_NPI, -claims_1k)) %>%
+    ggplot(aes(x = Prscrbr_NPI, y = claims_1k)) +
+    geom_col(fill = "lightskyblue", alpha = .6) +
+        scale_y_continuous(limits = c(0, 1400), breaks = seq(0, 1400, 200)) +
+    theme(axis.text.x = element_blank()) +
+    labs(title = "Dental Providers",
+         x = "Provider NPI",
+         y = "Claims per\n1K Beneficiaries")
+
+```
