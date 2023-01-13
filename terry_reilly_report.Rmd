@@ -89,7 +89,7 @@ df2 <- df %>%
         
         # Flag for missing claims_1k
         claims_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000),
-        low_count = if_else(is.na(claims_1k), 1L, 0L),
+        na_claims1k = if_else(is.na(claims_1k), 1L, 0L),
           
         # Impute missing counts as 10
         across(.cols = c("Antbtc_Tot_Clms", "Tot_Benes"),
@@ -102,7 +102,7 @@ df2 <- df %>%
 # removed, and one with them imputed.
 df3 <- bind_rows(
     df2 %>% mutate(dataset = "NAs_imputed"),
-    df2 %>% filter(low_count != 1) %>% mutate(dataset = "NAs_removed"))
+    df2 %>% filter(na_claims1k != 1) %>% mutate(dataset = "NAs_removed"))
 
 ```
 
