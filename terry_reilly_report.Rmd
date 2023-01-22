@@ -20,15 +20,6 @@ knitr::opts_chunk$set(message = FALSE)
 
 ```
 
-# Data
-
-- Data are from the 2020 Medicare Part D by-provider dataset.
-- Provider addresses were submitted to the Google Places API to retrieve organization names.
-- Terry Reilly clinics are organizations with "Terry" in their names. This identified the ten different clinics shown in the figures below.
-- Providers were categorized as either *medical* or *dental*. Medical providers are medical doctors, physician assistants, nurse practitioners, or certified nurse specialists. Dental providers are dentists. 68 medical or dental providers were identified.
-- Each provider had their number of antibiotic claims per 1K beneficiaries computed. 16 providers ended up with NA values for claims/1K due to either NAs in their antibiotic claims count, or their beneficiaries count. NA values for these variables indicate counts less than 11.
-- In the analyses below, two datasets were used. In one, all NA values for antibiotic claims/1K were removed. In the other, NA values for claims/1K were imputed in the following way: NA values for the antibiotic claims count and the beneficiaries count were imputed as 10. The number of claims per 1K beneficiaries was then computed from these.
-
 ```{r data}
 
 # Read in 2020 by-provider data
@@ -96,7 +87,10 @@ df2 <- df %>%
                ~ if_else(is.na(.x), 10, .x)),
         
         # Recompute claims_1k
-        claims_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000))
+        claims_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000),
+        
+        # Only last 4 digits of prescriber NPI
+        Prscrbr_NPI = str_extract(Prscrbr_NPI, ".{4}$"))
 
 # Create a single table containing two datasets: one with NA values of claims_1k
 # removed, and one with them imputed.
@@ -105,6 +99,15 @@ df3 <- bind_rows(
     df2 %>% filter(na_claims1k != 1) %>% mutate(dataset = "NAs_removed"))
 
 ```
+
+# Data
+
+- Data are from the 2020 Medicare Part D by-provider dataset.
+- Provider addresses were submitted to the Google Places API to retrieve organization names.
+- Terry Reilly clinics are organizations with "Terry" in their names. This identified the `r df2 %>% count(Clinic) %>% nrow()` different clinics shown in the figures below.
+- Providers were categorized as either *medical* or *dental*. Medical providers are medical doctors, physician assistants, nurse practitioners, or certified nurse specialists. Dental providers are dentists. `r df2 %>% count(Prscrbr_NPI) %>% nrow()` medical or dental providers were identified.
+- Each provider had their number of antibiotic claims per 1K beneficiaries computed. `r df2 %>% filter(na_claims1k == 1) %>% nrow()` providers ended up with NA values for claims/1K due to either NAs in their antibiotic claims count, or their beneficiaries count. NA values for these variables indicate counts less than 11.
+- In the analyses below, two datasets were used. In one, all NA values for antibiotic claims/1K were removed. In the other, NA values for claims/1K were imputed in the following way: NA values for the antibiotic claims count and the beneficiaries count were imputed as 10. The number of claims per 1K beneficiaries was then computed from these.
 
 ***
 
@@ -180,38 +183,38 @@ clinic_sum %>%
 Figures 4 and 5 give antibiotic claims/1K for indiviudal medical and dental providers, respectively.
 
 - Figures are based on the dataset with no imputation.
-- Provider NPIs are not shown.
-- The figures are shown on the same scale to facilitate comparison.
+- Only the last four digits of Provider NPIs are shown.
+- The figures use the same scale to facilitate comparison.
 
-```{r provider_med, fig.cap = "Figure 4. Claims/1K for individual medical providers."}
+```{r provider_med, fig.height = 8.5, fig.cap = "Figure 4. Claims/1K for individual medical providers."}
 
 df3 %>%
     filter(provider_cat == "Medical",
            dataset == "NAs_removed") %>%
-    mutate(Prscrbr_NPI = fct_reorder(Prscrbr_NPI, -claims_1k)) %>%
+    mutate(Prscrbr_NPI = fct_reorder(Prscrbr_NPI, claims_1k)) %>%
     ggplot(aes(x = Prscrbr_NPI, y = claims_1k)) +
     geom_col(fill = "lightskyblue", alpha = .6) +
     scale_y_continuous(limits = c(0, 1400), breaks = seq(0, 1400, 200)) +
-    theme(axis.text.x = element_blank()) +
+    coord_flip() +
     labs(title = "Medical Providers",
-         x = "Provider NPI",
-         y = "Claims per\n1K Beneficiaries")
+         x = "Provider\nNPI",
+         y = "Claims per 1K Beneficiaries")
 
 ```
 
 ***
 
-```{r provider_dent, fig.cap = "Figure 5. Claims/1K for individual dental providers"}
+```{r provider_dent, fig.height = 4, fig.cap = "Figure 5. Claims/1K for individual dental providers"}
 df3 %>%
     filter(provider_cat == "Dental",
            dataset == "NAs_removed") %>%
-    mutate(Prscrbr_NPI = fct_reorder(Prscrbr_NPI, -claims_1k)) %>%
+    mutate(Prscrbr_NPI = fct_reorder(Prscrbr_NPI, claims_1k)) %>%
     ggplot(aes(x = Prscrbr_NPI, y = claims_1k)) +
     geom_col(fill = "lightskyblue", alpha = .6) +
         scale_y_continuous(limits = c(0, 1400), breaks = seq(0, 1400, 200)) +
-    theme(axis.text.x = element_blank()) +
+    coord_flip() +
     labs(title = "Dental Providers",
-         x = "Provider NPI",
-         y = "Claims per\n1K Beneficiaries")
+         x = "Provider\nNPI",
+         y = "Claims per 1K Beneficiaries")
 
 ```
