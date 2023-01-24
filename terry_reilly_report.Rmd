@@ -4,16 +4,21 @@ author:
     - Jeremy Boyd, Ph.D.
     - jeremyboyd@pm.me
 date: "`r format(Sys.time(), '%B %d, %Y')`"
-output:
-    html_document:
-        theme: spacelab
-        toc: true
-        toc_float: true
+output: pdf_document
 ---
 
 ```{r setup, include = FALSE}
 
-knitr::opts_chunk$set(dev = "svg")
+# YAML info for HTML output
+# output:
+#     html_document:
+#         theme: spacelab
+#         toc: true
+#         toc_float: true
+
+# SVG preferred for HTML, but doesn't work for PDF
+# knitr::opts_chunk$set(dev = "svg")
+knitr::opts_chunk$set(dev = "png")
 knitr::opts_chunk$set(echo = FALSE)
 knitr::opts_chunk$set(warning = FALSE)
 knitr::opts_chunk$set(message = FALSE)
