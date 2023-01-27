@@ -160,10 +160,9 @@ df2 %>%
         booktabs = TRUE,
         caption =
             "Table 1. Summary statistics for medical and dental providers.")
-
-# Trying to collapse duplicate rows in columns 1 & 2 of table throws error in the latex knitting process.
 # %>%
 #     collapse_rows()
+# Trying to collapse duplicate rows in columns 1 & 2 of table throws error in the latex knitting process.
 
 ```
 
