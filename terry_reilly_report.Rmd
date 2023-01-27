@@ -4,7 +4,9 @@ author:
     - Jeremy Boyd, Ph.D.
     - jeremyboyd@pm.me
 date: "`r format(Sys.time(), '%B %d, %Y')`"
-output: pdf_document
+output:
+    pdf_document:
+        extra_dependencies: ["booktabs"]
 ---
 
 ```{r setup, include = FALSE}
@@ -16,12 +18,18 @@ output: pdf_document
 #         toc: true
 #         toc_float: true
 
+# Packages
+library(tidyverse)
+library(kableExtra)
+library(feather)
+
 # SVG preferred for HTML, but doesn't work for PDF
 # knitr::opts_chunk$set(dev = "svg")
-knitr::opts_chunk$set(dev = "png")
+# knitr::opts_chunk$set(dev = "png")
 knitr::opts_chunk$set(echo = FALSE)
 knitr::opts_chunk$set(warning = FALSE)
 knitr::opts_chunk$set(message = FALSE)
+options(tinytex.verbose = TRUE)
 
 ```
 
@@ -83,8 +91,17 @@ df2 <- df %>%
         # Simplify clinic names & order
         Clinic = str_remove(Clinic, ".+ - "),
         
+        # Only last 4 digits of prescriber NPI
+        Prscrbr_NPI = str_extract(Prscrbr_NPI, ".{4}$"),
+        
+        # claims/1k
+        claims_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000))
+
+# Compute claims/1k benes & deal with NAs
+df2.1 <- df2 %>%
+    mutate(
+        
         # Flag for missing claims_1k
-        claims_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000),
         na_claims1k = if_else(is.na(claims_1k), 1L, 0L),
           
         # Impute missing counts as 10
@@ -92,16 +109,13 @@ df2 <- df %>%
                ~ if_else(is.na(.x), 10, .x)),
         
         # Recompute claims_1k
-        claims_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000),
-        
-        # Only last 4 digits of prescriber NPI
-        Prscrbr_NPI = str_extract(Prscrbr_NPI, ".{4}$"))
+        claims_1k = Antbtc_Tot_Clms / (Tot_Benes / 1000))
 
 # Create a single table containing two datasets: one with NA values of claims_1k
 # removed, and one with them imputed.
 df3 <- bind_rows(
-    df2 %>% mutate(dataset = "NAs_imputed"),
-    df2 %>% filter(na_claims1k != 1) %>% mutate(dataset = "NAs_removed"))
+    df2.1 %>% mutate(dataset = "NAs_imputed"),
+    df2.1 %>% filter(na_claims1k != 1) %>% mutate(dataset = "NAs_removed"))
 
 ```
 
@@ -109,12 +123,49 @@ df3 <- bind_rows(
 
 - Data are from the 2020 Medicare Part D by-provider dataset.
 - Provider addresses were submitted to the Google Places API to retrieve organization names.
-- Terry Reilly clinics are organizations with "Terry" in their names. This identified the `r df2 %>% count(Clinic) %>% nrow()` different clinics shown in the figures below.
-- Providers were categorized as either *medical* or *dental*. Medical providers are medical doctors, physician assistants, nurse practitioners, or certified nurse specialists. Dental providers are dentists. `r df2 %>% count(Prscrbr_NPI) %>% nrow()` medical or dental providers were identified.
-- Each provider had their number of antibiotic claims per 1K beneficiaries computed. `r df2 %>% filter(na_claims1k == 1) %>% nrow()` providers ended up with NA values for claims/1K due to either NAs in their antibiotic claims count, or their beneficiaries count. NA values for these variables indicate counts less than 11.
+- Terry Reilly clinics are organizations with "Terry" in their names. This identified the `r df2.1 %>% count(Clinic) %>% nrow()` different clinics shown in the figures below.
+- Providers were categorized as either *medical* or *dental*. Medical providers are medical doctors, physician assistants, nurse practitioners, or certified nurse specialists. Dental providers are dentists. `r df2.1 %>% count(Prscrbr_NPI) %>% nrow()` medical or dental providers were identified.
+- Each provider had their number of antibiotic claims per 1K beneficiaries computed. `r df2.1 %>% filter(na_claims1k == 1) %>% nrow()` providers ended up with NA values for claims/1K due to either NAs in their antibiotic claims count, or their beneficiaries count. NA values for these variables indicate counts less than 11.
 - In the analyses below, two datasets were used. In one, all NA values for antibiotic claims/1K were removed. In the other, NA values for claims/1K were imputed in the following way: NA values for the antibiotic claims count and the beneficiaries count were imputed as 10. The number of claims per 1K beneficiaries was then computed from these.
 
-***
+See Table 1 below for summary statistics for medical and dental providers.
+
+```{r stat}
+
+# Table of summary stats
+df2 %>%
+    select(Prscrbr_NPI, provider_cat, Antbtc_Tot_Clms, Tot_Benes, claims_1k) %>%
+    pivot_longer(matches("Clms|Benes|claims"), names_to = "Variable",
+                 values_to = "value") %>%
+    group_by(provider_cat, Variable) %>%
+    summarize(n = sum(!is.na(Prscrbr_NPI)),
+              min = min(value, na.rm = TRUE),
+              max = max(value, na.rm = TRUE),
+              mean = mean(value, na.rm = TRUE), .groups = "drop") %>%
+    mutate(across(min:mean, ~ format(.x, digits = 1, nsmall = 1)),
+           across(min:mean, ~ str_trim(.x)),
+           value = paste0(mean, " (", min, "-", max, ")"),
+           Variable = case_when(
+               str_detect(Variable, "Antbtc") ~ "Antibiotic Claims Count",
+               str_detect(Variable, "Benes") ~ "Beneficiary Count",
+               str_detect(Variable, "1k") ~ "Antibiotic Claims per 1K Beneficiaries",
+               TRUE ~ "error"),
+           Variable = fct_relevel(Variable, "Antibiotic Claims Count",
+                                  "Beneficiary Count")) %>%
+    arrange(provider_cat, Variable) %>%
+    select(`Provider Type` = provider_cat, `N Providers` = n,
+           Variable , `Mean (Range)` = value) %>%
+    kable(
+        format = "latex",
+        booktabs = TRUE,
+        caption =
+            "Table 1. Summary statistics for medical and dental providers.")
+
+# Trying to collapse duplicate rows in columns 1 & 2 of table throws error in the latex knitting process.
+# %>%
+#     collapse_rows()
+
+```
 
 # Antibiotic use by clinic
 
@@ -122,7 +173,7 @@ df3 <- bind_rows(
 
 Figure 1 shows mean antibiotic claims per 1K beneficiaries by clinic and provider type. Additionally, the columns show results for the datasets with NAs imputed (left) and removed (right). The value to the right of each bar indicates the number of providers.
 
-```{r clinic, fig.height = 7, fig.cap = "Figure 1. Clinic means for all providers."}
+```{r clinic, fig.height = 7, fig.cap = "Clinic means for all providers."}
 
 # Compute mean claims_1k by dataset, clinic, provider_cat
 clinic_sum <- df3 %>%
@@ -143,13 +194,11 @@ clinic_sum %>%
 
 ```
 
-***
-
 ## Medical & dental separated
 
 Figures 2 and 3 show the same data as Figure 1, but with either medical providers only, or dental providers only. This makes it easier to see which clinics have higher or lower values of claims/1K.
 
-```{r clinic_med, fig.cap = "Figure 2. Clinic means for medical providers only."}
+```{r clinic_med, fig.cap = "Clinic means for medical providers only."}
 
 # Medical providers only
 clinic_sum %>%
@@ -164,9 +213,7 @@ clinic_sum %>%
 
 ```
 
-***
-
-```{r clinic_dent, fig.cap = "Figure 3. Clinic means for dental providers only."}
+```{r clinic_dent, fig.cap = "Clinic means for dental providers only."}
 
 # Medical providers only
 clinic_sum %>%
@@ -181,17 +228,15 @@ clinic_sum %>%
 
 ```
 
-***
-
 # Antibiotic use by provider
 
-Figures 4 and 5 give antibiotic claims/1K for indiviudal medical and dental providers, respectively.
+Figures 4 and 5 give antibiotic claims/1K for individual medical and dental providers, respectively.
 
 - Figures are based on the dataset with no imputation.
 - Only the last four digits of Provider NPIs are shown.
 - The figures use the same scale to facilitate comparison.
 
-```{r provider_med, fig.height = 8.5, fig.cap = "Figure 4. Claims/1K for individual medical providers."}
+```{r provider_med, fig.height = 8.5, fig.cap = "Claims/1K for individual medical providers."}
 
 df3 %>%
     filter(provider_cat == "Medical",
@@ -207,9 +252,7 @@ df3 %>%
 
 ```
 
-***
-
-```{r provider_dent, fig.height = 4, fig.cap = "Figure 5. Claims/1K for individual dental providers"}
+```{r provider_dent, fig.height = 4, fig.cap = "Claims/1K for individual dental providers."}
 df3 %>%
     filter(provider_cat == "Dental",
            dataset == "NAs_removed") %>%
