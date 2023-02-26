@@ -19,3 +19,5 @@ compute_time.R
 /ioslides-presentation_cache
 /ioslides-slides_cache
 /lib
+*.log
+*.tex
